@@ -1,0 +1,20 @@
+# Data and environment files
+data/*
+cache/*
+opt/*
+env/*
+*.Rhistory
+
+# Results and documentation
+output/*
+doc/*
+
+# Microsoft Office files
+*.docx
+*.pptx
+
+# Documentation
+doc/*
+
+# Mac-specific
+*.DS_Store

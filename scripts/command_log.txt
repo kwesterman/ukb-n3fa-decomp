@@ -1,0 +1,3 @@
+# Initial phenotyping
+qsub data_prep/prep_ukb_phenos_longitudinal.sh
+rsync -zavP uger:"florez_ukb_projects/gene-med-interactions/data/processed/ukb_phenos_longitudinal_unrelated.csv" ../data/processed/

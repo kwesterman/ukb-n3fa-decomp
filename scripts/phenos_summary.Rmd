@@ -1,0 +1,782 @@
+---
+output: html_document
+title: "Phenotype QC"
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE,warning = FALSE, 
+                      fig.path = "../output/phenos_summary/")
+suppressMessages(silent <- lapply(
+  c("knitr", "kableExtra", "tidyverse", "cowplot", "patchwork"), 
+  library, character.only = TRUE))
+```
+
+```{r read-phenos}
+raw_phenos <- read_csv("../data/processed/ukb_phenos_longitudinal_raw.csv")
+phenos <- read_csv("../data/processed/ukb_phenos_longitudinal_unrelated.csv")
+```
+
+## Exclusion criteria
+
+* No diabetes (self-report of diagnosed diabetes; field 2443)
+* No coronary heart disease (self-report of diagnosed MI or angina; field 6150)
+* No liver cirrhosis (ICD-10 codes K70.2-4, K71.7, K74.X; field 41202 (primary) or 41204 (secondary))
+* No cancer diagnosis within a year prior to assessment center visit
+* Not pregnant
+
+```{r exclusion-criteria}
+raw_phenos %>%
+  select(id, diabetes, CHD, cirrhosis, cancer_within_1yearac, pregnant) %>%
+  pivot_longer(-id, names_to="criterion") %>%
+  group_by(criterion) %>%
+  summarise(Yes = sum(value),
+            No = sum(!value)) %>%
+  mutate(criterion = c(
+    cancer_within_1yearac="Cancer status (within one year prior to baseline)",
+    CHD="CHD", cirrhosis = "Cirrhosis", diabetes = "Diabetes", 
+    pregnant = "Pregnant"
+  )[criterion]) %>%
+  setNames(c("Exclusion criterion", "Yes", "No")) %>%
+  kable(caption = "Sample counts for exclusion criteria") %>%
+  kable_styling(full_width = FALSE)
+
+raw_phenos %>%
+  filter(!diabetes, !CHD, !cirrhosis, !cancer_within_1yearac, !pregnant) %>%
+  summarise(N = n()) %>%
+  kable(caption = "Sample sizes after exclusions") %>%
+  kable_styling(full_width = FALSE)
+```
+
+## Biomarker preprocessing
+
+```{r biomarkers}
+cm_biomarker_fields <- c(
+  alt = 30620, alb = 30600, apoB = 30640, hscrp = 30710, chol = 30690, glu = 30740, 
+  hba1c = 30750, hdl = 30760, ldl = 30780, shbg = 30830, tg = 30870, vitD = 30890,
+  sbp = 4080, dbp = 4079
+)
+
+biomarkers_raw <- names(cm_biomarker_fields)
+
+statinadj_biomarkers <- c("apoB", "chol", "ldl")
+medsadj_biomarkers <- c("sbp", "dbp")
+logged_biomarkers <- c("alt", "hscrp", "tg")
+
+biomarkers <- biomarkers_raw
+biomarkers <- ifelse(biomarkers %in% statinadj_biomarkers,
+                     paste0(biomarkers_raw, "_statinadj"),
+                     biomarkers)
+biomarkers <- ifelse(biomarkers %in% medsadj_biomarkers,
+                     paste0(biomarkers_raw, "_medsadj"),
+                     biomarkers)
+biomarkers <- ifelse(biomarkers %in% logged_biomarkers,
+                     paste0(biomarkers_raw, "_log"),
+                     biomarkers)
+
+biomarkers_clean <- c(
+  "Alanine aminotransferase", "Albumin", "Apolipoprotein B", "High-sensitivity C-reactive protein", 
+  "Total cholesterol", "Random glucose", "Glycated hemoglobin", 
+  "High-density lipoprotein cholesterol", "Low-density lipoprotein cholesterol",
+  "Sex hormone-binding globulin", "Triglycerides", "Vitamin D",
+  "Systolic blood pressure", "Diastolic blood pressure"
+)
+biomarkers_short <- c(
+  "ALT", "Alb", "ApoB", "hsCRP", "TC", "RG", "HbA1c", "HDL-C", "LDL-C", "SHBG", 
+  "TG", "VitD", "SBP", "DBP"
+)
+
+biomarker_groups <- c(
+  "Liver", "Liver", "Lipids", "Inflammation", "Lipids", "Glycemic", "Glycemic",
+  "Lipids", "Lipids", "Other", "Lipids", "Other", "Blood pressure", "Blood pressure"
+)
+
+# biomarker_units <- c(
+#   "U/L", "g/L", "U/L", "g/L", "g/L", "U/L", "mg/L", "mmol/L", "mmol/L", "umol/L",
+#   "mg/L", "umol/L", "U/L", "mmol/L", "mmol/mol", "mmol/L", "nmol/L", "mmol/L",
+#   "nmol/L", "pmol/L", "mmol/L", "IU/mL", "nmol/L", "nmol/L", "umol/L", "g/L",
+#   "mmol/L", "umol/L", "mmol/L", "nmol/L"
+# )
+
+analytical_ranges <- list(
+  alt = c(3, 500), alb = c(15, 60), alp = c(5, 1500), apoA = c(0.4, 2.5), apoB = c(0.4, 2), 
+  ast = c(3, 1000), hscrp = c(0.08, 80), Ca = c(1, 5), chol = c(0.5, 18), creatinine = c(0, 4420), 
+  cysC = c(0.1, 8), bilirubin_dir = c(0, 171), ggt = c(5, 1200), glu = c(0.6, 45), hba1c = c(15, 184), 
+  hdl = c(0.05, 4.65), igf1 = c(1.3, 195), ldl = c(0.26, 10.3), lipA = c(5.76, 189), oestradiol = c(73, 17621), 
+  phos = c(0.32, 6.4), rheum_factor = c(10, 120), shbg = c(0.33, 233), tes = c(0.35, 55.52), 
+  bilirubin_tot = c(0, 513), protein_tot = c(30, 120), tg = c(0.1, 11.3), urate = c(89, 1785), 
+  urea = c(0.8, 50), vitD = c(10, 375) 
+)
+
+tibble(
+  Biomarker = biomarkers_clean,
+  Abbreviation = biomarkers_short,
+  Group = biomarker_groups,
+  `UKB Field` = cm_biomarker_fields,
+) %>%
+  mutate(`Log-transformed` = ifelse(biomarkers_raw[match(Biomarker, biomarkers_clean)]
+                                    %in% logged_biomarkers, "Yes", "No")) %>%
+  kable(caption = "Cardiometabolic biomarkers measured in the UK Biobank") %>%
+  kable_styling(full_width = FALSE)
+```
+
+The following QC and preprocessing steps were performed on raw blood biomarker data from the main assessment center visit:
+
+1. Adjust for statin usage where appropriate (TC, LDL-C, and ApoB)
+2. Log-transform for substantially non-normal biomarkers (ALT, TG, hsCRP, CBC-based inflammatory indices)
+3. Winsorize biomarker distributions at 5 SDs from the mean.
+
+Note: These preprocessing steps were undertaken in the full dataset (prior to removing related individuals).
+
+### Biomarker distributions
+
+Dashed lines in raw biomarker histograms denote the limits of the analytical range for the associated test (as provided by UKB).
+
+```{r biomarker-distributions, fig.asp=0.5}
+for (bm in biomarkers) {
+  raw_bm <- biomarkers_raw[match(bm, biomarkers)]
+  raw_hist <- ggplot(raw_phenos, aes_string(x = raw_bm)) +
+    geom_histogram(bins = 30) +
+    geom_vline(xintercept = analytical_ranges[[raw_bm]][1], linetype = "dashed") +
+    geom_vline(xintercept = analytical_ranges[[raw_bm]][2], linetype = "dashed") +
+    labs(x = biomarkers_short[match(bm, biomarkers)],
+         y = "Sample size",
+         title = paste0(biomarkers_clean[match(bm, biomarkers)], " (raw)"))
+  n_nonmissing <- sum(!is.na(phenos[[bm]]))
+  preprocessed_hist <- ggplot(phenos, aes_string(x = bm)) +
+    geom_histogram(bins = 30) +
+    labs(x = biomarkers_short[match(bm, biomarkers)],
+         y = "Sample size",
+         title = paste0(biomarkers_clean[match(bm, biomarkers)], " (preprocessed)"),
+         subtitle = paste0(bm, " (N = ", n_nonmissing, ")"))
+  print(plot_grid(raw_hist, preprocessed_hist, nrow = 1, align = "h"))
+}
+```
+
+## Diet preprocessing
+
+Dietary data came from online 24-hour dietary questionnaires, collected at anywhere from one to five timepoints including the assessment center visit (for the final ~70k participants) and online between approximately Feb 2011 - Apr 2012.
+
+The following QC and preprocessing steps were performed:
+
+1. Exclude questionnaires having reported daily caloric intake <600 or >4800 kcals/day
+2. Exclude questionnaires for which the participant reported that dietary intake that day was not typical (UKB field 100020)
+3. Take the mean for each basic dietary variable (single foods/nutrients) over all questionnaires returned by a given participant
+4. Calculate derived values (for example, the MUFA:SFA ratio)
+5. Winsorize all diet quantities (including derived values) at 3 SDs from the mean
+6. Calculate a 9-item Mediterranean diet score (MDS) based on the method described by Carter et al. 2019 *J. Nutr. Sci.*. This score assigns one point for intakes below (unhealthy) or above (healthy) the median population value (other than alcohol, which is assigned based on specific intake thresholds).
+
+```{r diet-variables}
+dr_nutrient_fields <- c(
+  TCALS = "100002",
+  CHO = "100005", SUGARS = "100008", 
+  FAT = "100004", MUFA = "Calculated", SFA = "100006", PUFA = "100007",
+  PRO = "100003", ALC = "100022", FIBER = "100009", 
+  NUT_FE = "100011", NUT_K = "100016", NUT_FOL = "100014",
+  NUT_MG = "100017", NUT_VITC = "100015", NUT_VITD = "100021"
+)
+dr_nutrient_fields_clean <- c(
+  "Total calories",
+  "Carbohydrates", "Sugars", 
+  "Dietary fat", "Saturated fat", "Monounsaturated fat", "Polyunsaturated fat", 
+  "Protein", "Alcohol", "Fiber", 
+  "Iron", "Potassium", "Folate", "Magnesium", "Vitamin C", "Vitamin D"
+)
+
+dr_food_group_fields <- setNames(
+  rep("Aggregate", 7),
+  c("VEG", "LEGUMES", "FRUIT", "NUTS", "FISH", "WHGRAIN", "REDPRMEAT")
+)
+dr_food_group_fields_clean <- c(
+  "Vegetables", "Legumes", "Fruit", "Nuts", "Fish", "Whole grains", 
+  "Red and processed meat"
+)
+
+ffq_fields <- c(
+  oily_fish = 1329, nonoily_fish = 1339, prmeat = 1349, poultry = 1359, 
+  beef = 1369, lamb = 1379
+)
+ffq_fields_clean <- c(
+  "Oily fish", "Non-oily fish", "Processed meat", "Poultry", "Beef", "Lamb"
+)
+
+supp_fields <- c(fish_oil = "20084")
+supp_fields_clean <- c("Fish oil")
+
+all_diet_fields <- names(c(
+  dr_nutrient_fields, dr_food_group_fields, ffq_fields, supp_fields
+))
+all_diet_field_ids <- c(
+  dr_nutrient_fields, dr_food_group_fields, ffq_fields, supp_fields
+)
+all_diet_fields_clean <- c(
+  dr_nutrient_fields_clean, dr_food_group_fields_clean, ffq_fields_clean, 
+  supp_fields_clean
+)
+
+tibble(
+  `Dietary trait` = all_diet_fields_clean,
+  Abbreviation = all_diet_fields,
+  `UKB field` = all_diet_field_ids,
+  Source = rep(c("24-hour dietary questionnaire", "Food frequency questionnaire", 
+                 "Supplement questionnaire"),
+               c(length(dr_nutrient_fields) + length(dr_food_group_fields), 
+                 length(ffq_fields), length(supp_fields)))
+) %>%
+  kable(caption = "Relevant dietary fields") %>%
+  kable_styling(full_width=FALSE)
+
+mds_components <- c("VEG", "LEGUMES", "FRUIT", "NUTS", "FISH", "WHGRAIN", 
+                   "MUFA2SFA", "REDPRMEAT", "ALC")
+mds_components_clean <- c("Vegetables", "Legumes", "Fruit", "Nuts", "Fish",
+                         "Whole grains", "MUFA-to-SFA ratio", 
+                         "Red and processed meat", "Alcohol")
+md_component_cats <- c(rep("Healthy", 7), "Unhealthy", "Mixed")
+md_component_thresholds <- c(rep("Greater than median", 7), "Less than median",
+                            ">5 and <25 g/day")
+tibble(
+  `MDS component` = mds_components_clean,
+  Abbreviation = mds_components,
+  Category = md_component_cats,
+  Threshold = md_component_thresholds
+) %>%
+  kable(caption = "Mediterranean diet score components and calculation") %>%
+  kable_styling(full_width=FALSE)
+```
+
+```{r num-recalls}
+phenos %>%
+  select(id, instance, TCALS) %>%
+  filter(!is.na(TCALS)) %>%
+  group_by(id) %>%
+  summarise(N_recalls = n()) %>%
+  group_by(N_recalls) %>%
+  summarise(N = n()) %>%
+  setNames(c("# recalls completed", "N")) %>%
+  kable(caption = "Sample sizes available with dietary data") %>%
+  kable_styling(full_width = F)
+```
+
+```{r diet-distributions, out.width="70%"}
+for (dv in c("mds", all_diet_fields)) {
+  clean_dv <- if (dv == "mds") {
+    "Mediterranean diet score"
+    } else {
+      all_diet_fields_clean[match(dv, all_diet_fields)]
+    }
+  n_nonmissing <- sum(!is.na(phenos[[dv]]))
+  dv_hist <- ggplot(phenos, aes_string(x=dv)) +
+    geom_histogram(bins=30) +
+    labs(x=dv,
+         y="Sample size",
+         title=paste0(clean_dv, " (N = ", n_nonmissing, ")"))
+  print(dv_hist)
+}
+```
+
+# Diet-biomarker relationships
+
+We will focus on the relationship between the Mediterranean diet pattern, and specifically its sub-components of fish and omega-3 fatty acid intake, and two outcomes (hsCRP and TG, both log-transformed). These relationships have been established in prior observational and interventional research, so allow for the evaluation of the impact of various covariate adjustments, regression modeling strategies, and the impact of longitudinal data.
+
+```{r prep-diet-bm-regressions}
+run_diet_bm_lm <- function(dv, bm, covars=c("age", "sex"), df=phenos) {
+  lm_str <- paste0(bm, " ~ ", dv, " + ", paste0(covars, collapse=" + "))
+  lm_summ <- tryCatch({
+    lm(as.formula(lm_str), data=df) %>%
+      broom::tidy() %>%
+      filter(term == dv)
+  }, error=tibble(NA))
+  lm_summ
+}
+
+run_diet_bm_lmm <- function(dv, bm, covars=c("age", "sex"), df=phenos) {
+  lmm_str <- paste0(bm, " ~ ", dv, " + ", paste0(covars, collapse=" + "), " + (1|id)")
+  lmer(as.formula(lmm_str), data=df)
+  # lmm_summ <- tryCatch({
+  #   lme4::lmer(as.formula(lmm_str), data=df) %>%
+  #     broom::tidy() %>%
+  #     filter(term == dv)
+  # }, error=tibble(NA))
+  # lmm_summ
+}
+
+fish_variables <- c("FISH", "oily_fish", "nonoily_fish", "fish_oil")
+key_bms <- c("hscrp_log")
+all_covars <- c("age", "sex", "mds", mds_components)
+
+dv_bm_permutations <- expand_grid(
+  dv = fish_variables,
+  bm = key_bms
+)
+```
+
+```{r baseline-models}
+bl_phenos <- filter(phenos, instance == 0)
+
+bl_lm_res_df <- dv_bm_permutations %>%
+  rowwise() %>%
+  mutate(lm_res = list(run_diet_bm_lm(dv, bm, covars = c("age", "sex"),
+                                      bl_phenos)))
+bl_lm_mdsAdj_res_df <- dv_bm_permutations %>%
+  rowwise() %>%
+  mutate(lm_res = list(run_diet_bm_lm(dv, bm, covars = c("age", "sex", "mds"),
+                                      bl_phenos)))
+bl_lm_mdsCompAdj_res_df <- dv_bm_permutations %>%
+  rowwise() %>%
+  mutate(lm_res = list(run_diet_bm_lm(dv, bm, covars = c("age", "sex", mds_components),
+                                      bl_phenos)))
+```
+
+```{r average-value-models}
+avg_phenos <- phenos %>%
+  group_by(id) %>%
+  summarise(across(c(fish_variables, key_bms, all_covars), 
+                   ~ mean(., na.rm = TRUE)))
+
+avg_lm_res_df <- dv_bm_permutations %>%
+  rowwise() %>%
+  mutate(lm_res = list(run_diet_bm_lm(dv, bm, covars = c("age", "sex"),
+                                      avg_phenos)))
+avg_lm_mdsAdj_res_df <- dv_bm_permutations %>%
+  rowwise() %>%
+  mutate(lm_res = list(run_diet_bm_lm(dv, bm, covars = c("age", "sex", "mds"),
+                                      avg_phenos)))
+avg_lm_mdsCompAdj_res_df <- dv_bm_permutations %>%
+  rowwise() %>%
+  mutate(lm_res = list(run_diet_bm_lm(dv, bm, covars = c("age", "sex", mds_components),
+                                      avg_phenos)))
+```
+
+```{r visualize-models}
+all_model_res_df <- bind_rows(list(
+  bl = bl_lm_res_df,
+  bl_mdsAdj = bl_lm_mdsAdj_res_df,
+  bl_mdsCompAdj = bl_lm_mdsCompAdj_res_df,
+  avg = avg_lm_res_df,
+  avg_mdsAdj = avg_lm_mdsAdj_res_df,
+  avg_mdsCompAdj = avg_lm_mdsCompAdj_res_df
+), .id = "model")
+
+all_model_res_df %>%
+  unnest(lm_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error) %>% 
+  ggplot(aes(x = dv, y = statistic, fill = model)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  # geom_point(position=position_dodge(width=0.2)) + 
+  # geom_errorbar(aes(ymin=l95, ymax=u95),
+  #               position=position_dodge(width=0.2), width=0.2) +
+  geom_hline(yintercept=0, color="gray") + 
+  labs(x = "Biomarker",
+       y = "Z-statistic",
+       title = "Fish effect estimates from linear regression (age/sex-adjusted)") +
+  facet_wrap(~bm, nrow = 2, scales = "free_x") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
+```
+
+```{r mds-bm-regressions, eval=F}
+a <- phenos %>%
+  filter(!is.na(hscrp_log),
+         !is.na(FISH)) %>%
+  select(id, instance, FISH, hscrp_log, mds) %>%
+  sample_n(10000)
+b <- run_diet_bm_lmm("FISH", "hscrp_log", covars="mds", df=a)
+
+mds_bm_res_df <- expand_grid(
+  e = c("FISH", "mds"),
+  bm = c("tg_log", "hscrp_log")
+) %>%
+  rowwise() %>%
+
+
+mds_bm_res_df %>%
+  unnest(lm_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         bm_group = factor(bm, levels=biomarkers, labels=biomarker_groups),
+         bm = factor(bm, levels=c("bmPC1", biomarkers), labels=c("PC1", biomarkers_short))) %>% 
+  ggplot(aes(x=e, y=statistic)) +
+  geom_bar(stat="identity") +
+  # geom_point(position=position_dodge(width=0.2)) + 
+  # geom_errorbar(aes(ymin=l95, ymax=u95),
+  #               position=position_dodge(width=0.2), width=0.2) +
+  geom_hline(yintercept=0, color="gray") + 
+  labs(x="Biomarker",
+       y="Z-statistic",
+       title="MDS effect estimates from linear regression (age/sex-adjusted)") +
+  facet_wrap(~bm, nrow=2, scales="free_x") +
+  theme(axis.text.x=element_text(angle=30, hjust=0.9))
+```
+
+```{r diet-hscrp-regressions, eval=F}
+diet_hscrp_res_df <- tibble(dv = c("mds", mds_components)) %>%
+  rowwise() %>%
+  mutate(lm_res = list(run_diet_bm_model(dv, "hscrp_log", covars=c("age", "sex"))),
+         lm_mdsAdj_res = list(run_diet_bm_model(dv, "hscrp_log", covars=c("age", "sex", "mds"))),
+         lm_compAdj_res = list(run_diet_bm_model(dv, "hscrp_log", covars=c("age", "sex", mds_components))))
+
+diet_hscrp_res_df %>%
+  unnest(lm_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         dv = factor(dv, levels=c("mds", mds_components), labels=c("MDS", mds_components_clean))) %>% 
+  ggplot(aes(x=dv, y=statistic)) +
+  geom_bar(stat="identity") +
+  # geom_point(position=position_dodge(width=0.2)) + 
+  # geom_errorbar(aes(ymin=l95, ymax=u95),
+  #               position=position_dodge(width=0.2), width=0.2) +
+  geom_hline(yintercept=0, color="gray") + 
+  labs(x="Diet variable",
+       y="Z-statistic",
+       title="MDS effect estimates from linear regression (age/sex-adjusted)") +
+  theme(axis.text.x=element_text(angle=30, hjust=0.9))
+```
+
+```{r diet-codings, eval=F}
+phenos <- mutate(phenos,
+                 LEGUMESbin = as.integer(LEGUMES > 0),
+                 NUTSbin = as.integer(NUTS > 0),
+                 FISHbin = as.integer(FISH > 0),
+                 WHGRAINbin = as.integer(WHGRAIN > 0),
+                 MUFA2SFA_log = log(MUFA2SFA))
+
+extra_diet_vars <- c("LEGUMES_bin", "NUTS_bin", "FISH_bin", "WHGRAIN_bin", "MUFA2SFA_log")
+
+extra_diet_hscrp_res_df <- tibble(dv = extra_diet_vars) %>%
+  rowwise() %>%
+  mutate(lm_res = list(run_diet_bm_model(dv, "hscrp_log", covars=c("age", "sex"))),
+         lm_mdsAdj_res = list(run_diet_bm_model(dv, "hscrp_log", covars=c("age", "sex", "mds"))),
+         lm_compAdj_res = list(run_diet_bm_model(dv, "hscrp_log", covars=c("age", "sex", mds_components))))
+
+bind_rows(diet_hscrp_res_df, extra_diet_hscrp_res_df) %>%
+  unnest(lm_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error) %>% 
+  ggplot(aes(x=dv, y=statistic)) +
+  geom_bar(stat="identity") +
+  # geom_point(position=position_dodge(width=0.2)) + 
+  # geom_errorbar(aes(ymin=l95, ymax=u95),
+  #               position=position_dodge(width=0.2), width=0.2) +
+  geom_hline(yintercept=0, color="gray") + 
+  labs(x="Diet variable",
+       y="Z-statistic",
+       title="MDS effect estimates from linear regression (age/sex-adjusted)") +
+  theme(axis.text.x=element_text(angle=30, hjust=0.9))
+
+bind_rows(diet_hscrp_res_df, extra_diet_hscrp_res_df) %>%
+  unnest(lm_compAdj_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error) %>% 
+  ggplot(aes(x=dv, y=statistic)) +
+  geom_bar(stat="identity") +
+  # geom_point(position=position_dodge(width=0.2)) + 
+  # geom_errorbar(aes(ymin=l95, ymax=u95),
+  #               position=position_dodge(width=0.2), width=0.2) +
+  geom_hline(yintercept=0, color="gray") + 
+  labs(x="Diet variable",
+       y="Z-statistic",
+       title="MDS effect estimates from linear regression (age/sex-adjusted)") +
+  theme(axis.text.x=element_text(angle=30, hjust=0.9))
+```
+
+```{r diet-bm-regressions, eval=F}
+diet_bm_res_df <- expand_grid(
+  dv = c("mds", mds_components),
+  bm = biomarkers,
+  n_recalls_min = 1:3
+) %>%
+  rowwise() %>%
+  mutate(lm_res = list(run_diet_bm_model(dv, bm, covars=c("age", "sex"), 
+                                         n_recalls_min=n_recalls_min)),
+         lm_mdsAdj_res = list(run_diet_bm_model(dv, bm, covars=c("age", "sex", "mds"), 
+                                         n_recalls_min=n_recalls_min)),
+         lm_compAdj_res = list(run_diet_bm_model(dv, bm, covars=c("age", "sex", mds_components),
+                                         n_recalls_min=n_recalls_min))) %>%
+  mutate(dv = ifelse(dv == "mds", "MDS", dv),
+         bm = ifelse(bm == "bmPC1", bm, biomarkers_short[match(bm, biomarkers)]))
+```
+
+```{r diet-bm-viz, eval=F}
+diet_bm_res_df %>%
+  filter(n_recalls_min == 1) %>%
+  unnest(lm_res) %>%
+  group_by(dv) %>%
+  mutate(dv_mag = mean(abs(statistic))) %>%
+  ungroup() %>%
+  group_by(bm) %>%
+  mutate(bm_mag = mean(abs(statistic))) %>%
+  ungroup() %>%
+  mutate(
+    dv = factor(dv, levels=unique(dv[order(dv_mag)])),
+    bm = factor(bm, levels=unique(bm[order(bm_mag)]))
+  ) %>%
+  ggplot(aes(x=dv, y=bm, fill=statistic)) +
+  geom_tile() +
+  scale_fill_gradient2() +
+  geom_text(aes(label=round(statistic, 1))) +
+  labs(x="Diet variable",
+       y="Biomarker",
+       title="Z-statistics from linear regression (age/sex-adjusted)") +
+  theme(axis.text.x=element_text(angle=30, hjust=0.9))
+```
+
+```{r hscrp-viz, eval=F}
+hscrp_z_minimal_plt <- diet_bm_res_df %>%
+  filter(bm == "hsCRP",
+         n_recalls_min == 1) %>%
+  unnest(lm_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         bm = factor(bm)) %>%
+  ggplot(aes(x=dv, y=statistic)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="gray") + 
+  labs(x="Biomarker",
+       y="Z-statistic",
+       title="MDS effect estimates from linear regression (age/sex-adjusted)") +
+  theme(axis.text.x=element_text(angle=30, hjust=0.9))
+
+hscrp_z_compAdj_plt <- diet_bm_res_df %>%
+  filter(bm == "hsCRP",
+         n_recalls_min == 1) %>%
+  unnest(lm_compAdj_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         bm = factor(bm)) %>%
+  ggplot(aes(x=dv, y=statistic)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="gray") + 
+  labs(x="Biomarker",
+       y="Z-statistic",
+       title="MDS effect estimates from linear regression (age/sex-adjusted)") +
+  theme(axis.text.x=element_text(angle=30, hjust=0.9))
+
+hscrp_z_minimal_plt + hscrp_z_compAdj_plt
+
+hscrp_z_minimal_res_df <- diet_bm_res_df %>%
+  filter(bm == "hsCRP",
+         n_recalls_min == 1) %>%
+  unnest(lm_res)
+hscrp_z_compAdj_res_df <- diet_bm_res_df %>%
+  filter(bm == "hsCRP",
+         n_recalls_min == 1) %>%
+  unnest(lm_compAdj_res)
+bind_rows(list(
+  minimal = hscrp_z_minimal_res_df,
+  compAdj = hscrp_z_compAdj_res_df
+), .id="adjustment") %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         bm = factor(bm)) %>%
+  ggplot(aes(x=dv, y=statistic)) +
+  geom_bar(stat="identity") +
+  geom_hline(yintercept=0, color="gray") + 
+  labs(x="Biomarker",
+       y="Z-statistic",
+       title="MDS effect estimates from linear regression (age/sex-adjusted)") +
+  facet_wrap(~adjustment) +
+  theme(axis.text.x=element_text(angle=30, hjust=0.9))
+```
+
+```{r recall-threshold-influence, fig.asp=0.8, eval=F}
+hscrp_estimates_by_recall_plt <- diet_bm_res_df %>%
+  filter(bm == "hsCRP") %>%
+  unnest(lm_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         n_recalls_min=factor(n_recalls_min)) %>%
+  ggplot(aes(x=dv, y=estimate, color=n_recalls_min)) +
+  geom_point(position=position_dodge(width=0.3)) +
+  geom_errorbar(aes(ymin=l95, ymax=u95), 
+                position=position_dodge(width=0.3), width=0.2) +
+  geom_hline(yintercept=0, color="gray")
+
+hscrp_z_by_recall_plt <- diet_bm_res_df %>%
+  filter(bm == "hsCRP") %>%
+  unnest(lm_res) %>%
+  mutate(n_recalls_min=factor(n_recalls_min)) %>%
+  ggplot(aes(x=dv, y=statistic, color=n_recalls_min)) +
+  geom_point(position=position_dodge(width=0.3)) +
+  geom_hline(yintercept=0, color="gray")
+
+hscrp_estimates_by_recall_plt / hscrp_z_by_recall_plt
+```
+
+```{r sensitivity, eval=F}
+sensitivity_covar_list <- list(
+  basic = c("age", "sex"),
+  gPCs = c("age", "sex", paste0("gPC", 1:5)),
+  tcals = c("age", "sex", "TCALS"),
+  bmi = c("age", "sex", "bmi"),
+  all = c("age", "sex", "TCALS", "bmi", paste0("gPC", 1:5))
+)
+
+sensitivity_res_df <- expand_grid(
+  dv = c("mds", "REDPRMEAT", "FISH", "FISHbin"),
+  bm = c("hscrp_log"),
+  covar_set = names(sensitivity_covar_list),
+  n_recalls = 1:5
+) %>%
+  rowwise() %>%
+  mutate(lm_res = list(run_diet_bm_model(dv, bm, covars=sensitivity_covar_list[[covar_set]],
+                                         n_recalls=n_recalls))) %>%
+  mutate(dv = ifelse(dv == "mds", "MDS", dv))
+
+sensitivity_res_df %>%
+  filter(dv == "REDPRMEAT") %>%
+  unnest(lm_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         covar_set = factor(covar_set, levels=names(sensitivity_covar_list)),
+         n_recalls = factor(n_recalls)) %>%
+  ggplot(aes(x=covar_set, y=estimate, color=n_recalls)) +
+  geom_point(position=position_dodge(width=0.3)) +
+  geom_errorbar(aes(ymin=l95, ymax=u95), 
+                position=position_dodge(width=0.3), width=0.2) +
+  geom_hline(yintercept=0, color="gray") +
+  labs(x="Adjustments",
+       y="Effect estimate",
+       title="Sensitivity models for REDPRMEAT - log(hsCRP) relationship")
+
+sensitivity_res_df %>%
+  filter(dv == "FISH") %>%
+  unnest(lm_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         covar_set = factor(covar_set, levels=names(sensitivity_covar_list)),
+         n_recalls = factor(n_recalls)) %>%
+  ggplot(aes(x=covar_set, y=estimate, color=n_recalls)) +
+  geom_point(position=position_dodge(width=0.3)) +
+  geom_errorbar(aes(ymin=l95, ymax=u95), 
+                position=position_dodge(width=0.3), width=0.2) +
+  geom_hline(yintercept=0, color="gray") +
+  labs(x="Adjustments",
+       y="Effect estimate",
+       title="Sensitivity models for FISH - log(hsCRP) relationship")
+
+sensitivity_res_df %>%
+  filter(dv == "FISHbin") %>%
+  unnest(lm_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         covar_set = factor(covar_set, levels=names(sensitivity_covar_list)),
+         n_recalls = factor(n_recalls)) %>%
+  ggplot(aes(x=covar_set, y=estimate, color=n_recalls)) +
+  geom_point(position=position_dodge(width=0.3)) +
+  geom_errorbar(aes(ymin=l95, ymax=u95), 
+                position=position_dodge(width=0.3), width=0.2) +
+  geom_hline(yintercept=0, color="gray") +
+  labs(x="Adjustments",
+       y="Effect estimate",
+       title="Sensitivity models for FISHbin - log(hsCRP) relationship")
+
+# diet_bm_res_df %>%
+#   unnest(lm_mdsAdj_res) %>%
+#   group_by(dv) %>% mutate(mean_abs_z = mean(abs(statistic))) %>% ungroup() %>% 
+#   arrange(mean_abs_z) %>% mutate(dv = factor(dv, levels=unique(dv))) %>%
+#   filter(dv != "mds") %>%
+#   ggplot(aes(x=dv, y=bm, fill=statistic)) +
+#   geom_tile() +
+#   scale_fill_gradient2() +
+#   geom_text(aes(label=round(statistic, 1))) +
+#   labs(x="Diet variable",
+#        y="Biomarker",
+#        title="Z-statistics from linear regression (age/sex/MDS-adjusted)") +
+#   theme(axis.text.x=element_text(angle=30, hjust=0.9))
+# 
+# diet_bm_res_df %>%
+#   unnest(lm_compAdj_res) %>%
+#   # group_by(dv) %>% mutate(mean_abs_z = mean(abs(statistic))) %>% ungroup() %>% 
+#   # arrange(mean_abs_z) %>% mutate(dv = factor(dv, levels=unique(dv))) %>%
+#   group_by(dv) %>%
+#   mutate(dv_mag = mean(abs(statistic))) %>%
+#   ungroup() %>%
+#   group_by(bm) %>%
+#   mutate(bm_mag = mean(abs(statistic))) %>%
+#   ungroup() %>%
+#   mutate(
+#     dv = factor(dv, levels=unique(dv[order(dv_mag)])),
+#     bm = factor(bm, levels=unique(bm[order(bm_mag)]))
+#   ) %>%
+#   filter(dv != "mds") %>%
+#   ggplot(aes(x=dv, y=bm, fill=statistic)) +
+#   geom_tile() +
+#   scale_fill_gradient2() +
+#   geom_text(aes(label=round(statistic, 1))) +
+#   labs(x="Diet variable",
+#        y="Biomarker",
+#        title="Z-statistics from linear regression (age/sex/MDS component-adjusted)") +
+#   theme(axis.text.x=element_text(angle=30, hjust=0.9))
+
+
+phenos %>%
+  group_by(num_recalls) %>%
+  summarise(m = mean(REDPRMEAT, na.rm=TRUE),
+            se = sd(REDPRMEAT, na.rm=TRUE) / sqrt(n())) %>%
+  mutate(l95 = m - 1.96 * se,
+         u95 = m + 1.96 * se) %>%
+  ggplot(aes(x=factor(num_recalls), y=m)) +
+  geom_point() +
+  geom_errorbar(aes(ymin=l95, ymax=u95), width=0.2)
+```
+
+## Influence of mixed models
+
+Does use of a mixed model, with a random effect governed by a diet-based covariance matrix, change effect estimates or precision compared to either unadjusted models or models using dietary fixed effects?
+
+```{r diet-lmm, eval=F}
+run_diet_bm_mixed_model <- function(dv, bm, df,
+                                    covars=c("age", "sex"), 
+                                    diet_covars=mds_components, 
+                                    n_recalls_min=1,
+                                    max_n=10000) {
+  lmm_df <- filter(df, num_recalls >= n_recalls_min)
+  if (nrow(lmm_df) > max_n) lmm_df <- sample_n(lmm_df, max_n)
+  print(dim(lmm_df))
+  dv_mat <- scale(lmm_df[, setdiff(mds_components, dv)])
+  diet_rel_mat <- dv_mat %*% t(dv_mat)
+  rownames(diet_rel_mat) <- lmm_df$id
+  colnames(diet_rel_mat) <- lmm_df$id
+  lmm_str <- paste0(bm, " ~ ", dv, " + ", paste0(covars, collapse=" + "))
+  GMMAT::glmmkin(
+    as.formula(lmm_str),
+    data=lmm_df,
+    kins=diet_rel_mat,
+    id="id",
+    family=gaussian(link="identity")
+  )
+  # lm_summ <- tryCatch({
+  #   lm(as.formula(lm_str), data=lm_df) %>%
+  #     broom::tidy() %>%
+  #     filter(term == dv)
+  # }, error=tibble(NA))
+  # lm_summ
+}
+
+summarize_glmmkin <- function(glmmkin_obj, target) {
+  beta <- glmmkin_obj$coefficients[target]
+  se <- sqrt(glmmkin_obj$cov[target, target])
+  p <- pchisq((beta / se)^2, df=1, lower.tail=FALSE)
+  tibble(estimate = beta, std.error = se, p.value = p)
+}
+
+# set.seed(123)
+# my_df <- sample_n(filter(phenos, num_recalls >= 4), 4000)
+# 
+# system.time(a <- run_diet_bm_mixed_model("REDPRMEAT", "hscrp_log", phenos, n_recalls_min=5))
+# system.time(a <- run_diet_bm_mixed_model("REDPRMEAT", "hscrp_log", my_df, max_n=5000, n_recalls_min=4))
+# b <- run_diet_bm_model("REDPRMEAT", "hscrp_log", df=my_df, n_recalls_min=4) 
+# d <- run_diet_bm_model("REDPRMEAT", "hscrp_log", covars=c("age", "sex", mds_components), 
+#                        df=my_df, n_recalls_min=4) 
+# 
+# summarize_glmmkin(a, "REDPRMEAT")
+# b
+# d
+```
+```{r, eval=F}
+run_diet_bm_model("FISH", "hscrp_log", covars=c("age", "sex", mds_components))
+run_diet_bm_model("FISH_bin", "hscrp_log", covars=c("age", "sex", mds_components))
+run_diet_bm_model("oily_fish", "hscrp_log", covars=c("age", "sex", mds_components))
+run_diet_bm_model("nonoily_fish", "hscrp_log", covars=c("age", "sex", mds_components))
+run_diet_bm_model("fish_oil", "hscrp_log", covars=c("age", "sex", mds_components))
+```
+
