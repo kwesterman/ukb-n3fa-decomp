@@ -1,3 +1,65 @@
-# Initial phenotyping
+# Prepare NMR data
+Rscript data_prep/prep_nmr.R  # Run interactively (~1 hr)
+
+rsync -avP uger:florez_ukb_projects/ukb-n3/data/processed/nmr/nmr_data.csv ../data/processed/nmr/
+
+# Phenotyping
 qsub data_prep/prep_ukb_phenos_longitudinal.sh
-rsync -zavP uger:"florez_ukb_projects/gene-med-interactions/data/processed/ukb_phenos_longitudinal_unrelated.csv" ../data/processed/
+
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ukb_phenos_longitudinal_raw.csv" ../data/processed/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ukb_phenos_longitudinal_unrelated.csv" ../data/processed/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ukb_phenos_longitudinal_panUKBB.csv" ../data/processed/
+rsync -avP uger:florez_ukb_projects/ukb-n3/data/processed/all_24hr_data.csv ../data/processed/
+# Run pheno_summary.Rmd
+
+# Main effects and covariate determinations
+# Run main_effects.Rmd (generates phenotype files for GWIS input)
+rsync -avP ../data/processed/ukb_gwis_phenos.csv uger:florez_ukb_projects/ukb-n3/data/processed/
+rsync -avP ../data/processed/gwis_covariates.txt uger:florez_ukb_projects/ukb-n3/data/processed/
+
+# GWIS
+qsub -t 1-22 gwis/run_gwis.sh oily_fish hscrp_log
+qsub -t 1-22 gwis/run_gwis.sh Omega_3_pct hscrp_log
+qsub -t 1-22 gwis/run_gwis.sh oily_fish Omega_3_pct
+qsub -t 1-22 gwis/run_gwis.sh fish_oil hscrp_log
+qsub -t 1-22 gwis/run_gwis.sh fish_oil Omega_3_pct
+
+gwis/postprocess_gwis.sh ../data/processed/gwis/oily_fish_hscrp_log
+gwis/postprocess_gwis.sh ../data/processed/gwis/Omega_3_pct_hscrp_log
+gwis/postprocess_gwis.sh ../data/processed/gwis/oily_fish_Omega_3_pct
+gwis/postprocess_gwis.sh ../data/processed/gwis/fish_oil_hscrp_log
+gwis/postprocess_gwis.sh ../data/processed/gwis/fish_oil_Omega_3_pct
+
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/gwis/*_merged_*" ../data/processed/gwis/
+rsync -ravP uger:"florez_ukb_projects/ukb-n3/data/processed/gwis/qq_plots" ../data/processed/gwis/
+
+# MAGMA
+qsub data_prep/prep_ld_ref.sh
+qsub post_gwis/prep_magma.sh
+
+qsub post_gwis/run_magma.sh ../data/processed/gwis/oily_fish_hscrp_log_magmaInput.tsv oily_fish_hscrp_log
+qsub post_gwis/run_magma.sh ../data/processed/gwis/Omega_3_pct_hscrp_log_magmaInput.tsv Omega_3_pct_hscrp_log
+qsub post_gwis/run_magma.sh ../data/processed/gwis/oily_fish_Omega_3_pct_magmaInput.tsv oily_fish_Omega_3_pct
+qsub post_gwis/run_magma.sh ../data/processed/gwis/fish_oil_hscrp_log_magmaInput.tsv fish_oil_hscrp_log
+qsub post_gwis/run_magma.sh ../data/processed/gwis/fish_oil_Omega_3_pct_magmaInput.tsv fish_oil_Omega_3_pct
+
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/magma/*.genes.out" ../data/processed/magma/
+
+# LDSC for whole-genome GxE estimates and genetic correlation
+qsub post_gwis/prep_ldsc.sh
+
+for pheno in Omega_3_pct hscrp_log; do qsub post_gwis/run_ldsc.sh oily_fish fish_oil ${pheno}; done
+
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ldsc/*.log" ../data/processed/ldsc/
+
+# Gene follow-up
+qsub post_gwis/gene_follow_up.sh 11 11:61566097-61586529 fads1 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 11 11:61581675-61635826 fads2 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 11 11:61555602-61562085 tmem258 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 15 15:38542925-38650450 spred1 Omega_3_pct hscrp_log
+qsub post_gwis/gene_follow_up.sh 6 06:31365561-31384090 mica Omega_3_pct hscrp_log
+qsub post_gwis/gene_follow_up.sh 2 02:99059321-99208496 inpp4a fish_oil Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 4 04:88894802-88905563 spp1 fish_oil Omega_3_pct
+
+rsync -ravP uger:florez_ukb_projects/ukb-n3/data/processed/gene_followup ../data/processed/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/genotypes/*.vcf.gz" ../data/processed/genotypes/
