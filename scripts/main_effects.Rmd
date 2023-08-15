@@ -1,0 +1,520 @@
+---
+output: html_document
+title: "Main effects"
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE,warning = FALSE, 
+                      fig.path = "../output/main_effects/")
+suppressMessages(silent <- lapply(
+  c("knitr", "kableExtra", "tidyverse", "lme4", "lmerTest", "cowplot", "patchwork"), 
+  library, character.only = TRUE))
+```
+
+```{r read-phenos}
+phenos <- read_csv("../data/processed/ukb_phenos_longitudinal_unrelated.csv")
+```
+
+# Diet-biomarker relationships
+
+We will focus on the relationship between the Mediterranean diet pattern, and specifically its sub-components of fish and omega-3 fatty acid intake, and two outcomes (hsCRP and TG, both log-transformed). These relationships have been established in prior observational and interventional research, so allow for the evaluation of the impact of various covariate adjustments, regression modeling strategies, and the impact of longitudinal data.
+
+```{r prep-diet-bm-regressions}
+run_diet_bm_lm <- function(dv, bm, covars = c("age", "sex"), df = phenos,
+                           std = FALSE) {
+  if (std) df <- mutate(df, across(all_of(c(dv, bm)), ~ scale(.)))
+  lm_str <- paste0(bm, " ~ ", dv, " + ", paste0(covars, collapse = " + "))
+  lm_summ <- tryCatch({
+    lm_fit <- lm(as.formula(lm_str), data = df) 
+    lm_fit %>%
+      broom::tidy() %>%
+      filter(term == dv) %>%
+      mutate(residual_df = lm_fit$df.residual)
+  }, error = tibble(NA))
+  lm_summ
+}
+
+run_diet_bm_lmm <- function(dv, bm, covars=c("age", "sex"), df = phenos,
+                           std = FALSE) {
+  if (std) df <- mutate(df, across(all_of(c(dv, bm)), ~ scale(.)))
+  lmm_str <- paste0(bm, " ~ ", dv, " + ", paste0(covars, collapse = " + "), " + (1|id)")
+  lmer(as.formula(lmm_str), data = df)
+}
+
+mds_components <- c("VEG", "LEGUMES", "FRUIT", "NUTS", "FISH", "WHGRAIN", 
+                   "MUFA2SFA", "REDPRMEAT", "ALC")
+fish_variables <- c("FISH", "OILY_FISH", "oily_fish", "nonoily_fish", 
+                    "N3FA", "N6FA",
+                    paste0("fish_oil", c("_24hr", "_touchscreen", "_verbal")))
+fish_variables_clean <- c(
+  "Fish - 24HR", "Oily fish - 24HR",
+  "Oily fish - FFQ", "Non-oily fish - FFQ",
+  "Dietary N3FA - 24HR", "Dietary N6FA - 24HR",
+  "Fish oil - 24HR", "Fish oil - touchscreen", "Fish oil - verbal interview"
+)
+key_bms <- c("hscrp_log", "tg_log")
+
+minimal_covars <- c("age", "age_squared", "sex", "ageBySex")
+ses_hl_covars <- c("ac", "income", "education", "smoking", "alcohol")
+ffq_covars <- c("cooked_veg", "raw_veg", "fresh_fruit", "prmeat", "whole_bread")
+covar_sets <- list(
+  minimal = minimal_covars,
+  adj = c(minimal_covars, ses_hl_covars),
+  mdsAdj = c(minimal_covars, ses_hl_covars, "mds"),
+  mdsCompAdj = c(minimal_covars, ses_hl_covars, 
+                 setdiff(mds_components, c("FISH"))), #"MUFA2SFA", "ALC"))),
+  ffqAdj = c(minimal_covars, ses_hl_covars, ffq_covars)
+)
+all_covars <- covar_sets$ffqAdj
+
+covar_set_labels <- c(
+  minimal = "Minimal (age & sex)", adj = "+ SES & lifestyle",
+  mdsAdj = "+ SES, lifestyle, & MDS", 
+  mdsComp = "+ SES, lifestyle, & MDS components",
+  ffqAdj = "+ SES, lifestyle, & FFQ diet traits"
+)
+
+dv_bm_permutations <- expand_grid(
+  dv = fish_variables,
+  bm = key_bms
+)
+
+phenos <- phenos %>%
+  mutate(income = ifelse(is.na(income), "Missing", income),  # Add missing indicators to SES & HL covariates rather than drop them
+         education = ifelse(is.na(education), "Missing", education),
+         across(all_of(ffq_covars), 
+                ~ ifelse(is.na(.), median(., na.rm = TRUE), .)))
+```
+
+We start with some basic regression models for diet-biomarker main effects, using baseline visit data only, to explore variations on (1) different fish/omega-3 intake variables and (2) different degrees of covariate adjustment. Outcomes will be TG (positive control, with a well-established negative effect from RCTs) and hsCRP (the primary outcome of interest, which also has fairly substantial literature support). 
+
+To retain the largest possible sample size, missing values in covariates (not primary exposures or outcomes) will be replaced by: 
+
+* A "Missing" value (for categorical covariates)
+* Median imputation (for numeric covariates)
+
+```{r baseline-models}
+bl_phenos <- filter(phenos, instance == 0)
+
+bl_lm_res_df <- dv_bm_permutations %>%
+  expand_grid(
+    covar_set = names(covar_sets)
+  ) %>% 
+  rowwise() %>%
+  mutate(model_res = list(run_diet_bm_lm(dv, bm, covars = covar_sets[[covar_set]],
+                                         bl_phenos, std = TRUE))) %>%
+  unnest(model_res)
+
+bl_lm_res_df %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         covar_set = factor(covar_set, levels = names(covar_sets),
+                            labels = covar_set_labels),
+         dv = factor(dv, levels = fish_variables, 
+                     labels = fish_variables_clean)) %>%
+  ggplot(aes(x = dv, y = estimate, color = covar_set)) +
+  geom_point(position=position_dodge(width=0.4)) +
+  geom_errorbar(aes(ymin=l95, ymax=u95),
+                position=position_dodge(width=0.4), width=0.2) +
+  geom_hline(yintercept=0, color="gray") + 
+  scale_color_discrete(name = "Adjustment set") + 
+  labs(x = "Diet variable",
+       y = "Standardized effect estimate (95% CI)",
+       title = "Fish effect estimates from linear regression") +
+  facet_wrap(~bm, nrow = 2, scales = "free_y") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
+
+expand_grid(
+  var1 = fish_variables,
+  var2 = fish_variables
+) %>%
+  rowwise() %>%
+  mutate(corr_fit = list(broom::tidy(cor.test(phenos[[var1]], 
+                                              phenos[[var2]])))) %>%
+  unnest(corr_fit) %>%
+  mutate(across(c(var1, var2), 
+                ~ factor(., levels = fish_variables, 
+                         labels = fish_variables_clean))) %>%
+  ggplot(aes(x = var1, y = var2, fill = estimate)) +
+  geom_tile() + 
+  scale_fill_gradient2(name = "Pearson\ncorrelation") +
+  labs(x = "", y = "", title = "Correlations between fish intake variables") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
+```
+
+We note a few things from these results.
+
+* Covariate adjustment generally reduces estimated effect magnitudes by a substantial amount, likely due to fish intake being correlated with other health-associated behaviors and traits.
+* Oily fish (from FFQ) has a much stronger association with both outcomes than fish variables from 24HR or non-oily fish.
+* Fish oil effect estimates from different sources (24HR, touchscreen questionnaire, and verbal interview) are reasonably consistent, despite their very modest correlation with each other.
+* Effect sizes on triglycerides (serving as the strongest positive control here) are largest for oily fish from FFQ compared to all other intake variables.
+* Adjustment for dietary intake variables from FFQ (cooked and raw vegetables, fresh fruit, processed meat, and choice of wholegrain bread) is an alternative to adjustment for the MDS and its components as an approach to addressing confounding by more general healthfulness of diet. Here, this strategy achieves almost as much attenuation of effect estimates (especially for oily fish) while allowing for much larger sample sizes (~2x). Notably, the degree of effect size attenuation is "weakest" specifically for intake variables derived from 24HR.
+
+Based on the results above, we will move forward using oily fish intake (from FFQ) as the primary dietary exposure variable and the full set of covariate adjustments including MDS. Next, we compare these baseline results to models that use longitudinal data via:
+
+* Averaging of diet and biomarker values (uses longitudinal data to increase precision in estimates, but not within-person comparisons)
+* LMM approach with a random intercept for each individual
+
+```{r average-value-models}
+avg_phenos <- phenos %>%
+  group_by(id) %>%
+  summarise(across(all_of(c(fish_variables, key_bms)), ~ mean(., na.rm = TRUE)),
+            across(all_of(all_covars), ~ .[instance == 0]))
+
+avg_lm_res_df <- dv_bm_permutations %>%
+  filter(dv == "oily_fish") %>%
+  rowwise() %>%
+  mutate(model_res = list(run_diet_bm_lm(dv, bm, all_covars, avg_phenos))) %>%
+  unnest(model_res)
+```
+
+```{r lmms}
+lmm_phenos <- phenos %>%
+  select(id, instance, all_of(c(fish_variables, key_bms, all_covars))) %>%
+  group_by(id) %>%
+  mutate(oily_fish_bl = oily_fish[instance == 0],
+         oily_fish_delta = oily_fish - oily_fish_bl) %>%
+  ungroup()
+
+tidy_lmer <- function(lmer_fit, target_var) {
+  summary(lmer_fit)$coef %>%
+    as_tibble(rownames = "term") %>%
+    rename(estimate = Estimate, std.error = `Std. Error`, 
+           p.value = `Pr(>|t|)`) %>%
+    filter(term == target_var)
+}
+
+lmm_res_df <- dv_bm_permutations %>%
+  filter(dv == "oily_fish") %>%
+  rowwise() %>%
+  mutate(lmm_fit = list(run_diet_bm_lmm(dv, bm, all_covars, lmm_phenos)),
+         model_res = list(tidy_lmer(lmm_fit, target_var = dv))) %>%
+  unnest(model_res)
+
+lmm_decomposed_fit <- run_diet_bm_lmm("oily_fish_delta", "hscrp_log", 
+                                      covars = c(all_covars, "oily_fish_bl"), 
+                                      lmm_phenos)
+
+lmm_unadj_fit <- run_diet_bm_lmm("oily_fish", "hscrp_log", 
+                                      covars = c(covar_sets$minimal), 
+                                      lmm_phenos)
+lmm_decomposed_unadj_fit <- run_diet_bm_lmm("oily_fish_delta", "hscrp_log", 
+                                      covars = c(covar_sets$minimal, "oily_fish_bl"), 
+                                      lmm_phenos)
+
+decomposed_res_df <- tibble(
+  dv = rep(c("oily_fish", "oily_fish_bl", "oily_fish_delta"), times = 2),
+  model = rep(c("lmm", "lmm_decomposed", "lmm_decomposed"), times = 2),
+  covar_set = rep(c("minimal", "ffqAdj"), each = 3),
+  covars = list(covar_sets$minimal, 
+                c(covar_sets$minimal, "oily_fish_delta"),
+                c(covar_sets$minimal, "oily_fish_bl"),
+                all_covars, 
+                c(all_covars, "oily_fish_delta"),
+                c(all_covars, "oily_fish_bl")
+)) %>%
+  rowwise() %>%
+  mutate(lmm_fit = list(run_diet_bm_lmm(dv, "hscrp_log", 
+                                        covars, 
+                                        lmm_phenos)),
+         model_res = list(tidy_lmer(lmm_fit, target_var = dv))) %>%
+  unnest(model_res)
+```
+
+```{r model-comparisons}
+bl_lm_res_df_nonStd <- run_diet_bm_lm("oily_fish", "hscrp_log", all_covars,
+                                      bl_phenos, std = FALSE) %>%
+  mutate(dv = "oily_fish")
+
+bind_rows(list(
+    baseline = bl_lm_res_df_nonStd,
+    average = filter(avg_lm_res_df, bm == "hscrp_log"),
+    lmm = filter(lmm_res_df, bm == "hscrp_log")
+  ), .id = "model") %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         model = fct_relevel(model, "baseline", "average", "lmm")) %>%
+  ggplot(aes(x = model, y = estimate)) +
+  geom_point(position=position_dodge(width=0.2)) +
+  geom_errorbar(aes(ymin=l95, ymax=u95),
+                position=position_dodge(width=0.2), width=0.2) +
+  geom_hline(yintercept=0, color="gray") + 
+  labs(x = "Biomarker",
+       y = "Effect estimate (95% CI)",
+       title = "Oily fish-hsCRP effect estimates from standard and mixed models") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
+
+decomposed_res_df %>%
+  filter(model != "lmm") %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         model = case_when(
+           # model == "lmm" ~ "LMM",
+           grepl("_bl$", dv) ~ "Decomposed LMM - baseline",
+           grepl("_delta$", dv) ~ "Decomposed LMM - delta"
+         ),
+         model = fct_relevel(model, 
+                             "Decomposed LMM - baseline", 
+                             "Decomposed LMM - delta"),
+         covar_set = fct_relevel(covar_set, c("minimal", "ffqAdj"))) %>%
+  ggplot(aes(x = covar_set, y = estimate, color = model)) +
+  geom_point(position=position_dodge(width=0.2)) +
+  geom_errorbar(aes(ymin=l95, ymax=u95),
+                position=position_dodge(width=0.2), width=0.2) +
+  geom_hline(yintercept=0, color="gray") + 
+  scale_color_discrete(labels = c("Decomposed LMM - baseline (between-person)",
+                                  "Decomposed LMM - delta (within-person)")) +
+  labs(x = "Covariate set",
+       y = "Effect estimate (95% CI)",
+       title = "LMM decomposition of between- and within-person effects") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
+```
+
+The confidence intervals around the LMM estimate are very slightly smaller, but for all intents and purposes, the baseline, average, and LMM approaches give the same estimate here. This is likely due to the very small sample size available with follow-up FFQ data. 
+
+We also examine results from a "decomposed" model that includes terms estimating the effect of both baseline oily fish intake and change-from-baseline. For the fully adjusted model, these estimates are very similar, supporting the robustness of the confounder adjustment set. Notably, when we remove most covariates other than age and sex, the baseline estimate becomes more extreme (likely due to confounding) but the longitudinal/within-person effect estimate is less affected.
+
+```{r ancestry-heterogeneity}
+ancestry_df <- read_csv("../data/processed/ukb_phenos_longitudinal_panUKBB.csv", 
+                        col_select = c("id", "ancestry"))
+
+ancestry_phenos <- bl_phenos %>%
+  inner_join(ancestry_df, by = "id")
+
+# ancestry_lmm_str <- paste0("hscrp_log ~ oily_fish + ", 
+#                            paste0(all_covars, collapse=" + "), 
+#                            " + (oily_fish|ancestry)")
+# ancestry_lmm_fit <- lmer(as.formula(ancestry_lmm_str), data = ancestry_phenos)
+
+# plot_data <- merTools::draw(ancestry_lm_fit) %>%
+#   select(-oily_fish, -ancestry) %>%
+#   expand_grid(
+#     oily_fish = seq(min(ancestry_phenos$oily_fish, na.rm = TRUE), 
+#                     max(ancestry_phenos$oily_fish, na.rm = TRUE), 0.1),
+#     ancestry = na.omit(unique(ancestry_phenos$ancestry))
+#   )
+
+ancestry_lm_str <- paste0("hscrp_log ~ oily_fish + ", 
+                           paste0(all_covars, collapse=" + "), 
+                           " + ancestry * oily_fish")
+ancestry_lm_fit <- lm(as.formula(ancestry_lm_str), data = ancestry_phenos)
+
+plot_data <- marginaleffects::datagrid(
+  model = ancestry_lm_fit, 
+  oily_fish = seq(min(ancestry_phenos$oily_fish, na.rm = TRUE),
+                  max(ancestry_phenos$oily_fish, na.rm = TRUE), 0.1),
+  ancestry = na.omit(unique(ancestry_phenos$ancestry))
+)
+
+plot_data %>%
+  mutate(pred = predict(ancestry_lm_fit, newdata = .)) %>%
+  ggplot(aes(x = oily_fish, y = pred, color = ancestry)) +
+  geom_line() +
+  labs(x = "Oily fish", y = "Predicted log(hsCRP)",
+       title = "Ancestry heterogeneity in oily fish-hsCRP relationship")
+
+broom::tidy(ancestry_lm_fit) %>%
+  filter(grepl("oily_fish", term)) %>%
+  kable(caption = "Subset of regression results including oily fish x ancestry interaction terms") %>%
+  kable_styling(full_width = FALSE)
+
+# ancestry_lmm_intOnly_str <- paste0("hscrp_log ~ oily_fish + ", 
+#                                    paste0(all_covars, collapse=" + "), 
+#                                    " + (1|ancestry)")
+# ancestry_lmm_intOnly_fit <- lmer(as.formula(ancestry_lmm_intOnly_str), 
+#                                  data = ancestry_phenos)
+# 
+# anova(ancestry_lmm_intOnly_fit, ancestry_lmm_fit)
+```
+
+Predicted slopes for the oily fish-hsCRP relationship look similar across Pan-UKBB ancestry groups (from a model with random intercepts and slopes for ancestry groups) other than AMR, but a likelihood ratio test doesn't show meaningful evidence for significance of this random slope.
+
+```{r recall-threshold-influence, fig.asp=0.8, eval=F}
+hscrp_estimates_by_recall_plt <- diet_bm_res_df %>%
+  filter(bm == "hsCRP") %>%
+  unnest(lm_res) %>%
+  mutate(l95 = estimate - 1.96 * std.error,
+         u95 = estimate + 1.96 * std.error,
+         n_recalls_min=factor(n_recalls_min)) %>%
+  ggplot(aes(x=dv, y=estimate, color=n_recalls_min)) +
+  geom_point(position=position_dodge(width=0.3)) +
+  geom_errorbar(aes(ymin=l95, ymax=u95), 
+                position=position_dodge(width=0.3), width=0.2) +
+  geom_hline(yintercept=0, color="gray")
+
+hscrp_z_by_recall_plt <- diet_bm_res_df %>%
+  filter(bm == "hsCRP") %>%
+  unnest(lm_res) %>%
+  mutate(n_recalls_min=factor(n_recalls_min)) %>%
+  ggplot(aes(x=dv, y=statistic, color=n_recalls_min)) +
+  geom_point(position=position_dodge(width=0.3)) +
+  geom_hline(yintercept=0, color="gray")
+
+hscrp_estimates_by_recall_plt / hscrp_z_by_recall_plt
+```
+
+# Incorporate NMR metabolomics
+
+We have access to quantified omega-3 and omega-6 fatty acid measurements in blood based on the Nightingale NMR platform. First, we look at raw correlations between fish intake variables, biomarkers, and relevant FA quantities.
+
+```{r prep-nmr}
+pufa_metabolites <- c("Omega_3", "Omega_6",
+                    "Omega_3_pct", "Omega_6_pct",
+                    "Omega_3_pct_PUFA", "Omega_6_pct_PUFA",
+                    "Omega_6_by_Omega_3",
+                    "DHA", "DHA_pct")
+```
+
+```{r nmr-corrs}
+nmr_corr_df <- expand_grid(
+  var1 = c(fish_variables, key_bms, pufa_metabolites),
+  var2 = c(fish_variables, key_bms, pufa_metabolites)
+) %>%
+  rowwise() %>%
+  mutate(corr_fit = list(broom::tidy(cor.test(bl_phenos[[var1]], 
+                                              bl_phenos[[var2]])))) %>%
+  unnest(corr_fit)
+
+nmr_corr_df %>%
+  mutate(across(c(var1, var2), ~ fct_relevel(., c(fish_variables, key_bms, pufa_metabolites)))) %>%
+  ggplot(aes(x = var1, y = var2, fill = estimate)) +
+  geom_tile() + 
+  scale_fill_gradient2() +
+  labs(x = "", y = "") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
+
+nmr_corr_df %>%
+  filter(var1 == "oily_fish",
+         var2 %in% pufa_metabolites) %>%
+  mutate(estimate = round(estimate, 2)) %>%
+  arrange(desc(abs(estimate))) %>%
+  select(`FA measurement` = var2, Correlation = estimate) %>%
+  kable(caption = "Correlations of FA metabolites with oily fish intake") %>%
+  kable_styling(full_width = FALSE)
+```
+
+We see that oily fish is the most strongly-correlated fish intake measurement not just with biomarkers, but also with blood N3 and N6 concentrations. Looking more closely at the oily fish-FA correlations, the strongest magnitudes involve N3 and DHA percentages of total fatty acids, though absolute concentrations are also similar (along with N6 quantities that directly trade off with N3, such as % of PUFA or N6:N3 ratio).
+
+Do we have evidence that the N3 percentage mediates any proportion of the relationship between oily fish intake and inflammation? Unlike the above, this mediation analysis will incorporate the full set of confounder adjustments used above.
+
+```{r nmr-mediation}
+test_mediation <- function(x, m, y, covars, df) {
+  df <- df %>%
+    select(all_of(c(x, m, y, covars))) %>%
+    na.omit()
+  med_form_str <- paste0(m, " ~ ", x, " + ", 
+                         paste(covars, collapse=" + "))
+  med_fit <- lm(as.formula(med_form_str), data=df)
+  out_form_str <- paste0(y, " ~ ", m, " + ", x, " + ",
+                         paste(covars, collapse=" + "))
+  out_fit <- lm(as.formula(out_form_str), data=df)
+  med_out <- mediation::mediate(med_fit, out_fit, treat=x, mediator=m, 
+                                robustSE=TRUE, sims=100)
+  med_out
+}
+
+main_med_obj <- test_mediation(
+  "oily_fish", "Omega_3_pct", "hscrp_log", all_covars, bl_phenos
+)
+
+unadj_med_obj <- test_mediation(
+  "oily_fish", "Omega_3_pct", "hscrp_log", covar_sets$minimal, bl_phenos
+)
+
+no_med_obj <- test_mediation(
+  "nonoily_fish", "Omega_3_pct", "hscrp_log", all_covars, bl_phenos
+)
+
+print("Primary oily fish mediation test:")
+summary(main_med_obj)
+print("Minimally-adjusted mediation test:")
+summary(unadj_med_obj)
+print("Non-oily fish mediation test:")
+summary(no_med_obj)
+```
+
+These mediation results suggest that approximately all of the oily fish-hsCRP relationship is mediated through the effect of oily fish on blood N3 levels. This is not surprising mechanistically, and even suggests that blood N3 concentrations (or percentage) might be a more effective measure of the biologically relevant components of the fish intake exposure than self-reported components. Notably, a second mediation analysis that contains only minimal covariate adjustment (age & sex) retains a modestly significant ADE and a proportion mediated that is less than one. This is a nice negative control of sorts, because we expect blood N3 levels to mediate the effect of fish intake, but not the effect of other lifestyle and socioeconomic factors correlated with fish intake.
+
+# Export datasets for interaction modeling
+
+```{r export}
+gwis_bms <- "hscrp_log"
+gwis_variables <- c("id", 
+                    gwis_bms, 
+                    c(fish_variables, "fish_oil"), 
+                    pufa_metabolites, 
+                    all_covars, paste0("gPC", 1:10))
+
+gwis_df <- phenos %>%
+  filter(instance == 0) %>%  # Because longitudinal doesn't appear to provide much value here
+  filter(if_all(all_of(c(gwis_bms, all_covars)), ~ !is.na(.))) %>%
+  mutate(fish_oil = fish_oil_touchscreen)
+
+mm_form <- as.formula(paste("~ 1 + ", paste(gwis_variables, collapse = " + ")))
+gwis_mat <- model.matrix(
+  mm_form, 
+  model.frame(mm_form, gwis_df, na.action = na.pass)
+)[, -1]  # Need intercept in formula to drop level from each factor, but don't want to keep it
+colnames(gwis_mat) <- make.names(colnames(gwis_mat))
+gwis_covars <- setdiff(colnames(gwis_mat), 
+                       c("id", key_bms, c(fish_variables, "fish_oil"), 
+                         pufa_metabolites))
+write(gwis_covars, "../data/processed/gwis_covariates.txt")
+write_csv(as_tibble(gwis_mat), "../data/processed/ukb_gwis_phenos.csv")
+```
+
+# To-do
+
+## Influence of mixed models
+
+Does use of a mixed model, with a random effect governed by a diet-based covariance matrix, change effect estimates or precision compared to either unadjusted models or models using dietary fixed effects?
+
+```{r diet-lmm, eval=F}
+run_diet_bm_mixed_model <- function(dv, bm, df,
+                                    covars=c("age", "sex"), 
+                                    diet_covars=mds_components, 
+                                    n_recalls_min=1,
+                                    max_n=10000) {
+  # lmm_df <- filter(df, num_recalls >= n_recalls_min)
+  if (nrow(lmm_df) > max_n) lmm_df <- sample_n(lmm_df, max_n)
+  print(dim(lmm_df))
+  dv_mat <- scale(lmm_df[, setdiff(mds_components, dv)])
+  diet_rel_mat <- dv_mat %*% t(dv_mat)
+  rownames(diet_rel_mat) <- lmm_df$id
+  colnames(diet_rel_mat) <- lmm_df$id
+  lmm_str <- paste0(bm, " ~ ", dv, " + ", paste0(covars, collapse=" + "))
+  GMMAT::glmmkin(
+    as.formula(lmm_str),
+    data=lmm_df,
+    kins=diet_rel_mat,
+    id="id",
+    family=gaussian(link="identity")
+  )
+  # lm_summ <- tryCatch({
+  #   lm(as.formula(lm_str), data=lm_df) %>%
+  #     broom::tidy() %>%
+  #     filter(term == dv)
+  # }, error=tibble(NA))
+  # lm_summ
+}
+
+summarize_glmmkin <- function(glmmkin_obj, target) {
+  beta <- glmmkin_obj$coefficients[target]
+  se <- sqrt(glmmkin_obj$cov[target, target])
+  p <- pchisq((beta / se)^2, df=1, lower.tail=FALSE)
+  tibble(estimate = beta, std.error = se, p.value = p)
+}
+
+# set.seed(123)
+# my_df <- sample_n(filter(phenos, num_recalls >= 4), 4000)
+# 
+# system.time(a <- run_diet_bm_mixed_model("oily_fish", "hscrp_log", my_df, n_recalls_min=5))
+# system.time(a <- run_diet_bm_mixed_model("REDPRMEAT", "hscrp_log", my_df, max_n=5000, n_recalls_min=4))
+# b <- run_diet_bm_model("REDPRMEAT", "hscrp_log", df=my_df, n_recalls_min=4) 
+# d <- run_diet_bm_model("REDPRMEAT", "hscrp_log", covars=c("age", "sex", mds_components), 
+#                        df=my_df, n_recalls_min=4) 
+# 
+# summarize_glmmkin(a, "REDPRMEAT")
+# b
+# d
+```
