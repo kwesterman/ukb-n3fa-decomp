@@ -1,0 +1,327 @@
+---
+output: html_document
+title: "Interaction effects"
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE,
+                      fig.path = "../output/interactions/")
+suppressMessages(silent <- lapply(
+  c("knitr", "kableExtra", "tidyverse", "lme4", "lmerTest", "cowplot", "patchwork"), 
+  library, character.only = TRUE))
+```
+
+```{r read-sumstats}
+phenos <- read_csv("../data/processed/ukb_phenos_longitudinal_unrelated.csv")
+
+fish_crp_gwis <- read_tsv("../data/processed/gwis/oily_fish_hscrp_log_merged_nom")
+fish_n3_gwis <- read_tsv("../data/processed/gwis/oily_fish_Omega_3_pct_merged_nom")
+n3_crp_gwis <- read_tsv("../data/processed/gwis/Omega_3_pct_hscrp_log_merged_nom")
+fish_oil_crp_gwis <- read_tsv("../data/processed/gwis/fish_oil_hscrp_log_merged_nom")
+fish_oil_n3_gwis <- read_tsv("../data/processed/gwis/fish_oil_Omega_3_pct_merged_nom")
+
+
+fish_crp_genes <- read_table("../data/processed/magma/oily_fish_hscrp_log.genes.out") %>%
+  arrange(P)
+fish_n3_genes <- read_table("../data/processed/magma/oily_fish_Omega_3_pct.genes.out") %>%
+  arrange(P)
+n3_crp_genes <- read_table("../data/processed/magma/Omega_3_pct_hscrp_log.genes.out") %>%
+  arrange(P)
+fish_oil_crp_genes <- read_table("../data/processed/magma/fish_oil_hscrp_log.genes.out") %>%
+  arrange(P)
+fish_oil_n3_genes <- read_table("../data/processed/magma/fish_oil_Omega_3_pct.genes.out") %>%
+  arrange(P)
+```
+
+The goal of this analysis was to understand the genetic modification of the relationship between dietary omega-3 intake and hsCRP, with plasma omega-3 (as a % of FA from NMR) as an established mediator. We conducted a series of genome-wide interaction studies to explore this possibility, with some of these models used to decompose the N3-hsCRP relationship into components "upstream" and "downstream" of the plasma omega-3 mediator.
+
+# GWIS results for the primary oily fish - hsCRP relationship
+
+```{r prep-manhattans}
+make_manhattan <- function(data, 
+                           pval_col, snp_col = "SNP", chr_col = "CHR", pos_col = "POS", 
+                           threshold = 5e-8, ylims = NULL, main = "") {
+
+  mh_data <- data %>%
+    dplyr::rename(all_of(c(SNP = snp_col, CHR = chr_col, POS = pos_col, P = pval_col))) %>%
+    filter(!is.na(P)) %>%
+    mutate(P = as.numeric(P),
+           P = ifelse(P == 0, min(1e-300, min(P[P != 0], na.rm = TRUE)), P),  # Remove P = 0
+           nlp = -log10(P))
+  
+  # Trim points in crowded regions (credit to RaMWAS package for code snippet)
+  yfac = as.integer(mh_data$nlp * 100) + 1L
+  yorder = sort.list(yfac)
+  yfac <- factor(yfac, levels = as.character(seq_len(max(yfac))))
+  ygroup <- split(seq_along(yfac), yfac)
+  for (i in seq_along(ygroup)) {
+    if (length(ygroup[[i]]) > 300) {
+      ygroup[[i]] <- sample(ygroup[[i]], size = 300, replace = FALSE)
+    }
+  }
+  keep <- unlist(ygroup, use.names = FALSE)
+  
+  mh_data <- mh_data %>%
+    select(SNP, CHR, POS, nlp) %>%
+    dplyr::slice(keep) %>%
+    mutate(POS = as.numeric(as.character(POS)),
+           CHR = factor(CHR, levels = c(1:22, "X"))) %>%
+    arrange(CHR, POS) %>%
+    mutate(pos_idx = seq(1, nrow(.)))
+  
+  suppressWarnings(chr_lengths <- sapply(c(1:22, "X"), function(chr) {
+    with(mh_data, max(POS[CHR == chr], na.rm = TRUE))
+  }))
+  chr_lengths <- ifelse(is.infinite(chr_lengths), 0, chr_lengths)
+  chr_start_pos <- cumsum(chr_lengths) - chr_lengths
+  
+  mh_data <- mh_data %>%
+    mutate(x_coord = chr_start_pos[CHR] + POS,
+           color = CHR,
+    ) %>%
+    arrange(as.integer(color), nlp) #%>%
+#     distinct(SNP, .keep_all = T)
+  
+  lims <- mh_data %>%
+    group_by(CHR) %>%
+    summarise(avg_coord = (min(x_coord) + max(x_coord)) / 2)
+  
+  newcols <- setNames(
+    rep(x = c("#AAAAAA", "#8A8A8A"), length.out = 23),  # Gray/dark gray for alternating chromosomes
+    levels(factor(lims$CHR))
+  )
+  
+  mh_plt <- ggplot() +
+    geom_point(data = mh_data, 
+               aes(x = x_coord, y = nlp, color = factor(color)), 
+               size = 0.75, alpha = 1) +
+    geom_hline(yintercept = -log10(threshold), linetype = "dashed", color = "black") + 
+    scale_x_continuous(breaks = lims$avg_coord[c(1:16, 18, 20, 20, 22, 23)], 
+                       labels = c(1:16, 18, 20, 20, 22, "X"), 
+                       expand = c(0,0)) +
+    scale_y_continuous(name = expression(-log[10](italic(p)))) +
+    scale_colour_manual(values = newcols, guide = "none") +
+    scale_fill_manual(name = "Color", values = newcols) +
+    geom_text(data = filter(mh_data, nlp > -log10(threshold)),
+               aes(x = x_coord, y = nlp, label = SNP)) +
+    labs(title = main) +
+    theme(axis.title.x = element_blank(),
+          axis.text.x = element_text(vjust = -1.5),
+          panel.grid.minor = element_blank(),
+          panel.grid.major.x = element_blank())
+  if (!is.null(ylims)) p1 <- p1 + coord_cartesian(ylim = ylims)
+  
+  mh_plt
+}
+
+gene_bonferroni <- 0.05 / nrow(fish_crp_genes)
+```
+
+```{r primary-manhattans}
+make_manhattan(fish_crp_gwis, "P_int", threshold = 5e-8) +
+  labs(title = "Variant-level: oily fish - hsCRP")
+
+make_manhattan(fish_crp_gwis, "P_joint", threshold = 5e-8) +
+  labs(title = "Variant-level joint test: oily fish - hsCRP")
+
+make_manhattan(fish_crp_genes, "P", snp_col = "GENE", pos_col = "START",
+               threshold = gene_bonferroni) +
+  labs(title = "Gene-level: oily fish - hsCRP")
+```
+
+# GWIS results using the plasma omega-3 mediator
+
+We can then explore GWIS results informed by the plasma omega-3 mediator. These corresponding to either "upstream" (genetic modifiers of the fish - plasma N3 relationship) or "downstream" (genetic modifiers of the plasma N3 - hsCRP relationship). These models provide both additional biological insights and may increase statistical power through greater precision (i.e., plasma N3 as a better proxy for true dietary omega-3 intake than self report). 
+
+```{r mediated-manhattans}
+make_manhattan(fish_n3_gwis, "P_int", threshold = 5e-8) +
+  labs(title = "Variant-level: oily fish - plasma omega-3 (\"upstream\")")
+make_manhattan(fish_crp_gwis, "P_joint", threshold = 5e-8) +
+  labs(title = "Variant-level joint test: oily fish - plasma omega-3 (\"upstream\")")
+make_manhattan(fish_n3_genes, "P", snp_col = "SYMBOL", pos_col = "START",
+               threshold = gene_bonferroni) +
+  labs(title = "Gene-level: oily fish - plasma omega-3 (\"upstream\")")
+
+make_manhattan(n3_crp_gwis, "P_int", threshold = 5e-8) +
+  labs(title = "Variant-level: plasma omega-3 - hsCRP (\"downstream\")")
+make_manhattan(n3_crp_genes, "P", snp_col = "SYMBOL", pos_col = "START",
+               threshold = gene_bonferroni) +
+  labs(title = "Gene-level: plasma omega-3 - hsCRP (\"downstream\")")
+```
+
+# GWIS results using fish oil instead of oily fish intake
+
+Fish oil is an alternative source of dietary omega-3 intake that, while not highly correlated with fish intake, might be expected to show similar genetic architecture of response modification. We will look at primary and "upstream" GWIS results from models replacing oily fish with fish oil. 
+
+```{r fish-oil-manhattans}
+make_manhattan(fish_oil_crp_gwis, "P_int", threshold = 5e-8) +
+  labs(title = "Variant-level: fish oil - hsCRP")
+make_manhattan(fish_oil_crp_genes, "P", snp_col = "SYMBOL", pos_col = "START",
+               threshold = gene_bonferroni) +
+  labs(title = "Gene-level: fish oil - hsCRP")
+
+make_manhattan(fish_oil_n3_gwis, "P_int", threshold = 5e-8) +
+  labs(title = "Variant-level: fish oil - plasma omega-3 (\"upstream\")")
+make_manhattan(fish_oil_n3_genes, "P", snp_col = "SYMBOL", pos_col = "START",
+               threshold = gene_bonferroni) +
+  labs(title = "Gene-level: fish oil - plasma omega-3 (\"upstream\")")
+```
+
+Furthermore, a genetic correlation between (G x Fish) and (G x Fish oil) would strengthen the mechanistic basis for these conclusions about interactions. Do we observe this in practice?
+
+
+# Gene-specific follow-up
+
+```{r prep-variant-regressions}
+run_gxe <- function(g, e, y, 
+                    covars = c("age", "sex"), 
+                    df = phenos,
+                    std = FALSE) {
+  if (std) df <- mutate(df, across(all_of(c(e, y)), ~ scale(.)))
+  lm_str <- paste0(y, " ~ ", g, " * ", e, " + ", paste0(covars, collapse = " + "))
+  lm_summ <- tryCatch({
+    lm_fit <- lm(as.formula(lm_str), data = df) 
+    lm_fit %>%
+      broom::tidy() %>%
+      filter(term == paste0(g, ":", e)) %>%
+      mutate(residual_df = lm_fit$df.residual)
+  }, error = tibble(NA))
+  lm_summ
+}
+
+phenos <- read_csv("../data/processed/ukb_phenos_longitudinal_unrelated.csv") %>%
+  filter(instance == 0) %>%
+  mutate(id = as.character(id))
+
+minimal_covars <- c("age", "age_squared", "sex", "ageBySex")
+ses_hl_covars <- c("ac", "income", "education", "smoking", "alcohol")
+ffq_covars <- c("cooked_veg", "raw_veg", "fresh_fruit", "prmeat", "whole_bread")
+covar_sets <- list(
+  minimal = minimal_covars,
+  adj = c(minimal_covars, ses_hl_covars),
+  mdsAdj = c(minimal_covars, ses_hl_covars, "mds"),
+  ffqAdj = c(minimal_covars, ses_hl_covars, ffq_covars)
+)
+```
+
+```{r fads-cluster-sumstats, eval=F}
+fads1_ss <- read_tsv("../data/processed/gwis/oily_fish_Omega_3_pct_fads1_subset")
+fads2_ss <- read_tsv("../data/processed/gwis/oily_fish_Omega_3_pct_fads2_subset")
+tmem258_ss <- read_tsv("../data/processed/gwis/oily_fish_Omega_3_pct_tmem258_subset")
+
+# for (e in exposures) {
+#   beta_col <- paste0("Beta_G-", e)
+#   var_col <- paste0("Var_Beta_G-", e)
+#   chisq_vals <- fads1_ss[[beta_col]]^2 / fads1_ss[[var_col]]
+#   fads1_ss[[paste0("p_int_", e)]] <- pchisq(chisq_vals, df=1, lower.tail=FALSE)
+# }
+
+exposures <- "oily_fish"
+
+fads1_ss %>%
+  mutate(nlp_int = -log10(robust_P_Value_Interaction)) %>%
+  ggplot(aes(x = POS, y = nlp_int)) +
+  geom_point() +
+  geom_text(aes(label = RSID)) +
+  labs(y=expression(-log[10](p[int])))
+```
+
+```{r spred1-sumstats, eval=F}
+spred1_ss <- read_tsv("../data/processed/gwis/Omega_3_pct_hscrp_log_spred1_subset")
+
+spred1_ss %>%
+  mutate(nlp_int = -log10(robust_P_Value_Interaction)) %>%
+  ggplot(aes(x = POS, y = nlp_int)) +
+  geom_point() +
+  geom_text(aes(label = RSID)) +
+  labs(y=expression(-log[10](p[int])))
+```
+
+```{r mica-sumstats, eval=F}
+mica_ss <- read_tsv("../data/processed/gwis/Omega_3_pct_hscrp_log_mica_subset")
+
+mica_ss %>%
+  mutate(nlp_int = -log10(robust_P_Value_Interaction)) %>%
+  ggplot(aes(x = POS, y = nlp_int)) +
+  geom_point() +
+  geom_text(aes(label = RSID)) +
+  labs(y=expression(-log[10](p[int])))
+```
+
+```{r inpp4a-sumstats, eval=F}
+inpp4a_ss <- read_tsv("../data/processed/gwis/fish_oil_Omega_3_pct_inpp4a_subset")
+
+inpp4a_ss %>%
+  mutate(nlp_int = -log10(robust_P_Value_Interaction)) %>%
+  ggplot(aes(x = POS, y = nlp_int)) +
+  geom_point() +
+  geom_text(aes(label = RSID)) +
+  labs(y=expression(-log[10](p[int])))
+```
+
+```{r spp1-sumstats, eval=F}
+spp1_ss <- read_tsv("../data/processed/gwis/fish_oil_Omega_3_pct_spp1_subset")
+
+spp1_ss %>%
+  mutate(nlp_int = -log10(robust_P_Value_Interaction)) %>%
+  ggplot(aes(x = POS, y = nlp_int)) +
+  geom_point() +
+  geom_text(aes(label = RSID)) +
+  labs(y=expression(-log[10](p[int])))
+```
+
+
+
+```{r tmem258-sumstats, eval=F}
+tmem258_ss <- read_tsv("../data/processed/gwis/oily_fish_Omega_3_pct_tmem258_subset")
+
+exposures <- "oily_fish"
+
+tmem258_ss %>%
+  mutate(nlp_int = -log10(robust_P_Value_Interaction)) %>%
+  ggplot(aes(x = POS, y = nlp_int)) +
+  geom_point() +
+  geom_text(aes(label = RSID)) +
+  labs(y=expression(-log[10](p[int])))
+```
+
+```{r tmem258-regressions, eval=F}
+extract_gt_vec <- function()
+a <- vcfR::read.vcfR("../data/processed/genotypes/tmem258_genotypes.vcf.gz")
+
+var_info <- vcfR::getFIX(a)
+gt <- vcfR::extract.gt(a, element = "DS", 
+                       mask = (var_info[, "ID"] == "rs102274"), 
+                       as.numeric = TRUE)
+gt_df <- gt %>%
+  as_tibble(rownames = "id") %>%
+  rename(rs102274 = value)
+
+phenos <- left_join(phenos, gt_df, by = "id")
+
+run_gxe("rs102274", "oily_fish", "Omega_3_pct", covar_sets$ffqAdj, phenos)
+run_gxe("rs102274", "oily_fish", "Omega_3_pct", 
+        paste0(covar_sets$ffqAdj, " * rs102274"), 
+        phenos)
+run_gxe("rs102274", "oily_fish", "Omega_3_pct", 
+        c(covar_sets$ffqAdj, paste0(paste0("gPC", 1:5), " * oily_fish")), 
+        phenos)
+
+# phenos %>%
+#   filter(!is.na(oily_fish), !is.na(hscrp_log)) %>%
+#   mutate(fish_tert = cut(oily_fish, c(-1, 0, 0.2, 10), include.lowest=FALSE,
+#                          labels=c("None", "<=1 serving/wk", ">1 serving/wk")),
+#          rs622087_int = factor(round(rs622087), labels=c("TT", "GT", "GG"))) %>%
+#   group_by(fish_tert, rs622087_int) %>%
+#   summarise(m = mean(hscrp_log),
+#             se = sd(hscrp_log) / sqrt(n()),
+#             l95 = m - 1.96 * se,
+#             u95 = m + 1.96 * se) %>%
+#   ggplot(aes(x=rs622087_int, y=m, color=fish_tert)) +
+#   geom_point(position=position_dodge(width=0.2)) +
+#   geom_errorbar(aes(ymin=l95, ymax=u95), position=position_dodge(width=0.2),
+#                 width=0.2) +
+#   scale_color_discrete(name="Oily fish intake (FFQ)") +
+#   labs(x="rs622087",
+#        y="Mean log(hsCRP) w/ 95% CI")
+```
