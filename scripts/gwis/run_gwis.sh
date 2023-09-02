@@ -19,14 +19,14 @@ pheno=$2
 chr=$SGE_TASK_ID
 
 
-gPC_arr=(gPC1 gPC2 gPC3 gPC4 gPC5)
+gPC_arr=(gPC1 gPC2 gPC3 gPC4 gPC5 gPC6 gPC7 gPC8 gPC9 gPC10)
 gPC_int_arr=( "${gPC_arr[@]/#/${exposure}By}" )
 covars=$(cat ../data/processed/gwis_covariates.txt | tr '\n' ' ')
 covars="${covars} ${gPC_int_arr[@]}"
 
 
 source /broad/software/scripts/useuse
-use R-4.0
+use R-4.1
 R --no-save <<EOF
 library(tidyverse)
 read_csv("../data/processed/ukb_gwis_phenos.csv") %>%
@@ -39,7 +39,7 @@ singularity exec \
 	-B ../data/processed:/data \
 	-B /broad/ukbb/imputed_v3:/bgendir \
 	-B /humgen/florezlab/UKBB_app27892:/sampledir \
-	${singularity_dir}/gem-v1.4.1a-workflow.simg \
+	${singularity_dir}/gem-v1.5.2-workflow.simg \
 	/bin/bash <<EOF
 
 /GEM/GEM \

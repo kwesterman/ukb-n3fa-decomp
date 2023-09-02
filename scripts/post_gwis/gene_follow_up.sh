@@ -26,7 +26,7 @@ use GCC-5.2
 
 
 # Subset genome-wide summary stats to the gene region
-R --vanilla <<EOF
+R --no-save <<EOF
 library(tidyverse)
 pos_vec <- as.numeric(str_split(gsub(".*:", "", "${range}"), "-", simplify=TRUE))
 gene_ss <- read_tsv("../data/processed/gwis/${e}_${pheno}_chr${chr}") %>%
@@ -46,7 +46,7 @@ eval "${qctool}" \
 	-og ${geno_dir}/${gene_symbol}_genotypes.bgen \
 	-os ${geno_dir}/${gene_symbol}_genotypes.sample
 
-# Convert genotype file to PLINK2 format and export to VCF
+# Convert genotype file to PLINK2 format and export to raw and VCF
 plink2=../opt/plink2.0/plink2
 ${plink2} \
 	--bgen ${geno_dir}/${gene_symbol}_genotypes.bgen ref-first \
@@ -61,72 +61,120 @@ ${plink2} \
 	--pfile ${geno_dir}/${gene_symbol}_genotypes \
 	--export A \
 	--out ${geno_dir}/${gene_symbol}_genotypes 
+${plink2} \
+	--pfile ${geno_dir}/${gene_symbol}_genotypes \
+	--extract ${fu_dir}/${e}_${pheno}_${gene_symbol}_top_rsid.txt \
+	--export A \
+	--out ${fu_dir}/${gene_symbol}_top_rsid
 
 # Test GxE at all variants in the region (no MAF filter)
-R --vanilla <<EOF
+
+gPC_arr=(gPC1 gPC2 gPC3 gPC4 gPC5 gPC6 gPC7 gPC8 gPC9 gPC10)
+gPC_int_arr=( "${gPC_arr[@]/#/${e}By}" )
+covars=$(cat ../data/processed/gwis_covariates.txt | tr '\n' ' ')
+covars="${covars} ${gPC_int_arr[@]}"
+
+R --no-save <<EOF
 library(tidyverse)
-library(vcfR)
-
-run_gxe <- function(g, e, y, 
-                    covars = c("age", "sex"), 
-                    df = phenos,
-                    std = FALSE) {
-  if (std) df <- mutate(df, across(all_of(c(e, y)), ~ scale(.)))
-  lm_str <- paste0(y, " ~ ", g, " * ", e, " + ", paste0(covars, collapse = " + "))
-  lm_summ <- tryCatch({
-    lm_fit <- lm(as.formula(lm_str), data = df) 
-    lm_fit %>%
-      broom::tidy() %>%
-      filter(term == paste0(g, ":", e)) %>%
-      mutate(residual_df = lm_fit[["df.residual"]])
-  }, error = tibble(NA))
-  lm_summ
-}
-
-minimal_covars <- c("age", "age_squared", "sex", "ageBySex")
-ses_hl_covars <- c("ac", "income", "education", "smoking", "alcohol")
-ffq_covars <- c("cooked_veg", "raw_veg", "fresh_fruit", "prmeat", "whole_bread")
-covar_sets <- list(
-  minimal = minimal_covars,
-  adj = c(minimal_covars, ses_hl_covars),
-  mdsAdj = c(minimal_covars, ses_hl_covars, "mds"),
-  ffqAdj = c(minimal_covars, ses_hl_covars, ffq_covars)
-)
-
-gt_df <- read_tsv("${geno_dir}/${gene_symbol}_genotypes.raw", name_repair = "unique") %>%
-  select(id = IID, matches("^rs")) %>%
-  mutate(id = as.character(id))
-  #rename_with(~ gsub("_.*", "", .), everything())
-
-regression_df <- read_csv("../data/processed/ukb_gwis_phenos.csv") %>%
-  mutate(id = as.character(id)) %>%
-  left_join(gt_df, by = "id")
-
-all_rsids <- setdiff(colnames(gt_df), "id")
-gwis_covars <- scan("../data/processed/gwis_covariates.txt", what=character())
-lm_res_df <- tibble(rsid = all_rsids) %>%
-  rowwise() %>%
-  mutate(model_res = list(run_gxe(rsid, "${e}", "${pheno}", 
-				  covars = gwis_covars, df = regression_df))) %>%
-  unnest(model_res)
-lm_res_df %>%
-  write_csv("${fu_dir}/${e}_${pheno}_${gene_symbol}_regressions")
-
-#top_rsid <- scan("${fu_dir}/${e}_${pheno}_${gene_symbol}_top_rsid.txt", what = character())
-#gt_df %>%
-#  select(all_of(c("id", top_rsid))) %>%
-#  write_csv("${fu_dir}/${e}_${pheno}_${gene_symbol}_top_rsid_genotypes.csv")
+read_csv("../data/processed/ukb_gwis_phenos.csv") %>%
+  mutate(across(contains("gPC"), ~ . * ${e}, .names="${e}By{.col}")) %>%
+  write_csv("../data/processed/${e}_${pheno}_phenos_${gene_symbol}.tmp")
 EOF
 
-#vcfr_obj <- read.vcfR("${geno_dir}/${gene_symbol}_genotypes.vcf.gz")
-#vcf_ids <- getID(vcfr_obj)
-#gt_df <- extract.gt(vcfr_obj, element = "DS", mask = !duplicated(vcf_ids), as.numeric = TRUE) %>%
-#  t() %>%
-#  as_tibble(rownames = "id")
+singularity_dir=~/kw/singularity
+singularity exec \
+	-B ../data/processed:/data \
+	-B /broad/ukbb/imputed_v3:/bgendir \
+	-B /humgen/florezlab/UKBB_app27892:/sampledir \
+	${singularity_dir}/gem-v1.5.2-workflow.simg \
+	/bin/bash <<EOF
 
-#lm_res_df <- tibble(rsid = all_rsids) %>%
-#  slice(1:5) %>%
-#  rowwise() %>%
-#  mutate(model_res = list(run_gxe(rsid, "fish_oil", "Omega_3_pct", gwis_covars, regression_df))) %>%
-#  unnest(model_res)
+/GEM/GEM \
+	--bgen /data/genotypes/${gene_symbol}_genotypes.bgen \
+	--sample /data/genotypes/${gene_symbol}_genotypes.sample \
+	--pheno-file /data/${e}_${pheno}_phenos_${gene_symbol}.tmp \
+	--sampleid-name id \
+	--pheno-name ${pheno} \
+	--exposure-names ${e} \
+	--covar-names ${covars} \
+	--delim , \
+	--maf 0.001 \
+	--missing-value NA \
+	--output-style minimum \
+	--out /data/gene_followup/${e}_${pheno}_${gene_symbol}_regressions
+
+EOF
+
+rm ../data/processed/${e}_${pheno}_phenos_${gene_symbol}.tmp
+
+
+
+
+
+#R --vanilla <<EOF
+#library(tidyverse)
+#library(vcfR)
 #
+#run_gxe <- function(g, e, y, 
+#                    covars = c("age", "sex"), 
+#                    df = phenos,
+#                    std = FALSE) {
+#  if (std) df <- mutate(df, across(all_of(c(e, y)), ~ scale(.)))
+#  lm_str <- paste0(y, " ~ ", g, " * ", e, " + ", paste0(covars, collapse = " + "))
+#  lm_summ <- tryCatch({
+#    lm_fit <- lm(as.formula(lm_str), data = df) 
+#    lm_fit %>%
+#      broom::tidy() %>%
+#      filter(term == paste0(g, ":", e)) %>%
+#      mutate(residual_df = lm_fit[["df.residual"]])
+#  }, error = tibble(NA))
+#  lm_summ
+#}
+#
+#minimal_covars <- c("age", "age_squared", "sex", "ageBySex")
+#ses_hl_covars <- c("ac", "income", "education", "smoking", "alcohol")
+#ffq_covars <- c("cooked_veg", "raw_veg", "fresh_fruit", "prmeat", "whole_bread")
+#covar_sets <- list(
+#  minimal = minimal_covars,
+#  adj = c(minimal_covars, ses_hl_covars),
+#  mdsAdj = c(minimal_covars, ses_hl_covars, "mds"),
+#  ffqAdj = c(minimal_covars, ses_hl_covars, ffq_covars)
+#)
+#
+#gt_df <- read_tsv("${geno_dir}/${gene_symbol}_genotypes.raw", name_repair = "unique") %>%
+#  select(id = IID, matches("^rs")) %>%
+#  mutate(id = as.character(id))
+#  #rename_with(~ gsub("_.*", "", .), everything())
+#
+#regression_df <- read_csv("../data/processed/ukb_gwis_phenos.csv") %>%
+#  mutate(id = as.character(id)) %>%
+#  left_join(gt_df, by = "id")
+#
+#all_rsids <- setdiff(colnames(gt_df), "id")
+#gwis_covars <- scan("../data/processed/gwis_covariates.txt", what=character())
+#lm_res_df <- tibble(rsid = all_rsids) %>%
+#  rowwise() %>%
+#  mutate(model_res = list(run_gxe(rsid, "${e}", "${pheno}", 
+#				  covars = gwis_covars, df = regression_df))) %>%
+#  unnest(model_res)
+#lm_res_df %>%
+#  write_csv("${fu_dir}/${e}_${pheno}_${gene_symbol}_regressions")
+#
+##top_rsid <- scan("${fu_dir}/${e}_${pheno}_${gene_symbol}_top_rsid.txt", what = character())
+##gt_df %>%
+##  select(all_of(c("id", top_rsid))) %>%
+##  write_csv("${fu_dir}/${e}_${pheno}_${gene_symbol}_top_rsid_genotypes.csv")
+#EOF
+#
+##vcfr_obj <- read.vcfR("${geno_dir}/${gene_symbol}_genotypes.vcf.gz")
+##vcf_ids <- getID(vcfr_obj)
+##gt_df <- extract.gt(vcfr_obj, element = "DS", mask = !duplicated(vcf_ids), as.numeric = TRUE) %>%
+##  t() %>%
+##  as_tibble(rownames = "id")
+#
+##lm_res_df <- tibble(rsid = all_rsids) %>%
+##  slice(1:5) %>%
+##  rowwise() %>%
+##  mutate(model_res = list(run_gxe(rsid, "fish_oil", "Omega_3_pct", gwis_covars, regression_df))) %>%
+##  unnest(model_res)
+##
