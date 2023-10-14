@@ -51,11 +51,12 @@ singularity exec \
 	--exposure-names ${exposure} \
 	--covar-names ${covars} \
 	--delim , \
-	--maf 0.01 \
 	--missing-value NA \
+	--cat-threshold 3 \
+	--maf 0.01 \
 	--robust 1 \
 	--threads 8 \
-	--output-style minimum \
+	--output-style meta \
 	--out /data/gwis/${exposure}_${pheno}_chr${chr}
 
 EOF
