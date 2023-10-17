@@ -54,7 +54,7 @@ fish_variables_clean <- c(
 )
 key_bms <- c("hscrp_log", "tg_log")
 
-minimal_covars <- c("age", "age_squared", "sex", "ageBySex")
+minimal_covars <- c("age", "age_squared_std", "sex", "ageBySex_std")
 ses_hl_covars <- c("ac", "income", "education", "smoking", "alcohol")
 ffq_covars <- c("cooked_veg", "raw_veg", "fresh_fruit", "prmeat", "whole_bread")
 covar_sets <- list(
@@ -80,7 +80,9 @@ dv_bm_permutations <- expand_grid(
 )
 
 phenos <- phenos %>%
-  mutate(income = ifelse(is.na(income), "Missing", income),  # Add missing indicators to SES & HL covariates rather than drop them
+  mutate(age_squared_std = as.vector(scale(age_squared)),  # To avoid scale issues affecting LMM convergence
+         ageBySex_std = as.vector(scale(ageBySex)),  # To avoid scale issues affecting LMM convergence
+         income = ifelse(is.na(income), "Missing", income),  # Add missing indicators to SES & HL covariates rather than drop them
          education = ifelse(is.na(education), "Missing", education),
          across(all_of(ffq_covars), 
                 ~ ifelse(is.na(.), median(., na.rm = TRUE), .)))
@@ -239,7 +241,10 @@ bind_rows(list(
   geom_errorbar(aes(ymin=l95, ymax=u95),
                 position=position_dodge(width=0.2), width=0.2) +
   geom_hline(yintercept=0, color="gray") + 
-  labs(x = "Biomarker",
+  scale_x_discrete(labels = c("LR - baseline E & Y",
+                              "LR - average E & Y",
+                              "LMM - longitudinal")) +
+  labs(x = "",
        y = "Effect estimate (95% CI)",
        title = "Oily fish-hsCRP effect estimates from standard and mixed models") +
   theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
@@ -262,9 +267,10 @@ decomposed_res_df %>%
   geom_errorbar(aes(ymin=l95, ymax=u95),
                 position=position_dodge(width=0.2), width=0.2) +
   geom_hline(yintercept=0, color="gray") + 
+  scale_x_discrete(labels = c("Minimal covariate adj.", "Full covariate adj.")) +
   scale_color_discrete(labels = c("Decomposed LMM - baseline (between-person)",
                                   "Decomposed LMM - delta (within-person)")) +
-  labs(x = "Covariate set",
+  labs(x = "",
        y = "Effect estimate (95% CI)",
        title = "LMM decomposition of between- and within-person effects") +
   theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
@@ -425,12 +431,18 @@ no_med_obj <- test_mediation(
   "nonoily_fish", "Omega_3_pct", "hscrp_log", all_covars, bl_phenos
 )
 
+neg_control_obj <- test_mediation(
+  "raw_veg", "Omega_3_pct", "hscrp_log", all_covars, bl_phenos
+)
+
 print("Primary oily fish mediation test:")
 summary(main_med_obj)
 print("Minimally-adjusted mediation test:")
 summary(unadj_med_obj)
 print("Non-oily fish mediation test:")
 summary(no_med_obj)
+print("Raw vegetable intake mediation test (healthy lifestyle negative control):")
+summary(neg_control_obj)
 ```
 
 These mediation results suggest that approximately all of the oily fish-hsCRP relationship is mediated through the effect of oily fish on blood N3 levels. This is not surprising mechanistically, and even suggests that blood N3 concentrations (or percentage) might be a more effective measure of the biologically relevant components of the fish intake exposure than self-reported components. Notably, a second mediation analysis that contains only minimal covariate adjustment (age & sex) retains a modestly significant ADE and a proportion mediated that is less than one. This is a nice negative control of sorts, because we expect blood N3 levels to mediate the effect of fish intake, but not the effect of other lifestyle and socioeconomic factors correlated with fish intake.
@@ -518,3 +530,12 @@ summarize_glmmkin <- function(glmmkin_obj, target) {
 # b
 # d
 ```
+
+
+```{r testing-nmr-prediction}
+target_met <- "Omega_3_pct"
+predictor_mets <- setdiff(names(metabolite_df), target_met)
+pred_lm_str <- paste0(target_met, " ~ ", paste(predictor_mets, collapse = " + "))
+pred_lm <- lm(as.formula(pred_lm_str), data = metabolite_df)
+```
+
