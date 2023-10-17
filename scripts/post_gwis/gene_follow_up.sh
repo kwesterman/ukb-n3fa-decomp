@@ -28,7 +28,7 @@ use GCC-5.2
 # Subset genome-wide summary stats to the gene region
 R --no-save <<EOF
 library(tidyverse)
-pos_vec <- as.numeric(str_split(gsub(".*:", "", "${range}"), "-", simplify=TRUE))
+pos_vec <- as.numeric(str_split(gsub(".*:", "", "${range}"), "-", simplify=TRUE))  # Already includes upstream/downstream padding
 gene_ss <- read_tsv("../data/processed/gwis/${e}_${pheno}_chr${chr}") %>%
   filter(POS >= pos_vec[1], POS <= pos_vec[2]) 
 gene_ss %>%
@@ -111,7 +111,8 @@ singularity exec \
 	--missing-value NA \
 	--cat-threshold 3 \
 	--maf 0.001 \
-	--output-style minimum \
+	--robust 1 \
+	--output-style meta \
 	--out /data/gene_followup/${e}_${pheno}_${gene_symbol}_regressions
 
 # Conditional on top variant
@@ -127,7 +128,8 @@ singularity exec \
 	--missing-value NA \
 	--cat-threshold 3 \
 	--maf 0.001 \
-	--output-style minimum \
+	--robust 1 \
+	--output-style meta \
 	--out /data/gene_followup/${e}_${pheno}_${gene_symbol}_regressions_cond
 
 EOF

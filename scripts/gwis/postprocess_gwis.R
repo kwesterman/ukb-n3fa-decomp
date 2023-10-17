@@ -34,26 +34,27 @@ make_qq <- function(data, pval_col, main=""){
   keep = keep | c(TRUE, diff(levels) != 0)
   keep = which(keep)
   
-  par(ps=18)
-  plot(x=x_vals[keep], y=y_vals[keep], 
-       xlab=expression(-log[10](italic(p)) * " (Expected)"), 
-       ylab=expression(-log[10](italic(p)) * " (Observed)"),
-       main=main, cex=0.8, 
-       cex.lab=0.8, cex.main=0.9, 
-       pch=16, ylim=c(0, ceiling(max(y_vals))))
-  abline(0, 1, lty=2)
-  legend(x='topleft', y='topleft',
+  par(ps = 18)
+  plot(x = x_vals[keep], y = y_vals[keep], 
+       xlab = expression(-log[10](italic(p)) * " (Expected)"), 
+       ylab = expression(-log[10](italic(p)) * " (Observed)"),
+       main = main, cex = 0.8, 
+       cex.lab = 0.8, cex.main = 0.9, 
+       pch = 16, ylim = c(0, ceiling(max(y_vals))))
+  abline(0, 1, lty = 2)
+  legend(x = 'topleft', y = 'topleft',
          bquote(lambda == .(calc_lambda(data[[pval_col]]))), 
-         cex=0.9, bty="n")
+         cex = 0.9, bty = "n")
 }
 
 
 ### Read in summary stats and subset to columns of interest
 
 ss_cols <- c(
-  CHR="CHR", SNP="RSID", POS="POS",
-  EA="Effect_Allele", NEA="Non_Effect_Allele", AF="AF",
-  N="N_Samples", P_int="robust_P_Value_Interaction", P_joint="robust_P_Value_Joint"
+  CHR = "CHR", SNP = "RSID", POS = "POS",
+  EA = "Effect_Allele", NEA = "Non_Effect_Allele", AF = "AF",
+  N = "N_Samples", P_int = "P_Value_Interaction", P_joint = "P_Value_Joint", 
+  robust_P_int = "robust_P_Value_Interaction", robust_P_joint = "robust_P_Value_Joint"
 )
 
 high_qual_variants <- read_tsv("../data/processed/ukb_rsIDs_maf0.005_info0.5.txt", 
@@ -61,8 +62,7 @@ high_qual_variants <- read_tsv("../data/processed/ukb_rsIDs_maf0.005_info0.5.txt
 
 ss_df <- fread(filepath, stringsAsFactors=F, data.table=F) %>%
   select(all_of(ss_cols), matches("^Beta"), matches("^Var_Beta")) %>%
-  mutate(P_int = as.numeric(P_int),
-	 P_joint = as.numeric(P_joint)) %>%
+  mutate(across(contains("P_"), ~ as.numeric(.))) %>%
   filter(SNP %in% high_qual_variants)
 if ("AF" %in% names(ss_df)) ss_df <- filter(ss_df, pmin(AF, 1 - AF) > 0.01)
 
@@ -70,21 +70,21 @@ if ("AF" %in% names(ss_df)) ss_df <- filter(ss_df, pmin(AF, 1 - AF) > 0.01)
 ### Write particular subsets for downstream analysis
 
 ss_df %>%
-  filter(P_int < 0.05) %>%
+  filter(robust_P_int < 0.05) %>%
   write_tsv(paste0(filepath, "_nom"))
 
 ss_df %>%
-  filter(P_int < 5e-8) %>%
+  filter(robust_P_int < 5e-8) %>%
   write_tsv(paste0(filepath, "_gw"))
 
 magma_filepath <- gsub("_merged", "_magmaInput.tsv", filepath)
 ss_df %>%
-  select(SNP, N, P=P_int) %>%
+  select(SNP, N, P = robust_P_int) %>%
   write_tsv(magma_filepath)
 
 fuma_filepath <- gsub("_merged", "_fumaInput.tsv", filepath)
 ss_df %>%
-  select(SNP, CHR, POS, EA, NEA, AF, N, P=P_int) %>%
+  select(SNP, CHR, POS, EA, NEA, AF, N, P = robust_P_int) %>%
   write_tsv(fuma_filepath)
 system(paste0("gzip -f ", fuma_filepath))
 
@@ -95,6 +95,10 @@ qq_dir <- paste0(dirname(filepath), "/qq_plots/")
 system(paste0("mkdir -p ", qq_dir))
 write(calc_lambda(ss_df$P), paste0(qq_dir, gsub("_merged|\\.tbl", "_lambda", basename(filepath))))
 plot_filepath <- paste0(qq_dir, gsub("_merged|\\.tbl", "_QQ.pdf", basename(filepath)))
-pdf(file=plot_filepath)
+pdf(file = plot_filepath)
 make_qq(ss_df, "P_int")
+dev.off()
+robust_plot_filepath <- paste0(qq_dir, gsub("_merged|\\.tbl", "_robust_QQ.pdf", basename(filepath)))
+pdf(file = robust_plot_filepath)
+make_qq(ss_df, "robust_P_int")
 dev.off()
