@@ -64,7 +64,6 @@ ss_df <- fread(filepath, stringsAsFactors=F, data.table=F) %>%
   select(all_of(ss_cols), matches("^Beta"), matches("^Var_Beta")) %>%
   mutate(across(contains("P_"), ~ as.numeric(.))) %>%
   filter(SNP %in% high_qual_variants)
-if ("AF" %in% names(ss_df)) ss_df <- filter(ss_df, pmin(AF, 1 - AF) > 0.01)
 
 
 ### Write particular subsets for downstream analysis
@@ -93,7 +92,7 @@ system(paste0("gzip -f ", fuma_filepath))
   
 qq_dir <- paste0(dirname(filepath), "/qq_plots/")
 system(paste0("mkdir -p ", qq_dir))
-write(calc_lambda(ss_df$P), paste0(qq_dir, gsub("_merged|\\.tbl", "_lambda", basename(filepath))))
+write(calc_lambda(ss_df$robust_P_int), paste0(qq_dir, gsub("_merged|\\.tbl", "_lambda", basename(filepath))))
 plot_filepath <- paste0(qq_dir, gsub("_merged|\\.tbl", "_QQ.pdf", basename(filepath)))
 pdf(file = plot_filepath)
 make_qq(ss_df, "P_int")

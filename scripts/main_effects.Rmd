@@ -531,8 +531,7 @@ summarize_glmmkin <- function(glmmkin_obj, target) {
 # d
 ```
 
-
-```{r testing-nmr-prediction}
+```{r testing-nmr-prediction, eval=F}
 target_met <- "Omega_3_pct"
 predictor_mets <- setdiff(names(metabolite_df), target_met)
 pred_lm_str <- paste0(target_met, " ~ ", paste(predictor_mets, collapse = " + "))

@@ -1,5 +1,5 @@
 # Prepare NMR data
-Rscript data_prep/prep_nmr.R  # Run interactively (~1 hr)
+qsub data_prep/prep_nmr.sh
 
 rsync -avP uger:florez_ukb_projects/ukb-n3/data/processed/nmr/nmr_data.csv ../data/processed/nmr/
 
@@ -21,8 +21,8 @@ rsync -avP ../data/processed/gwis_covariates.txt uger:florez_ukb_projects/ukb-n3
 qsub -t 1-22 gwis/run_gwis.sh oily_fish hscrp_log
 qsub -t 1-22 gwis/run_gwis.sh oily_fish Omega_3_pct
 qsub -t 1-22 gwis/run_gwis.sh Omega_3_pct hscrp_log
-qsub -t 1-22 gwis/run_gwis.sh fish_oil Omega_3_pct
 qsub -t 1-22 gwis/run_gwis.sh fish_oil hscrp_log
+qsub -t 1-22 gwis/run_gwis.sh fish_oil Omega_3_pct
 
 gwis/postprocess_gwis.sh ../data/processed/gwis/oily_fish_hscrp_log
 gwis/postprocess_gwis.sh ../data/processed/gwis/oily_fish_Omega_3_pct
@@ -53,13 +53,27 @@ for pheno in Omega_3_pct hscrp_log; do qsub post_gwis/run_ldsc.sh oily_fish fish
 rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ldsc/*.log" ../data/processed/ldsc/
 
 # Gene follow-up
-qsub post_gwis/gene_follow_up.sh 5 05:123395487-123774213 parp8 oily_fish Omega_3_pct
-qsub post_gwis/gene_follow_up.sh 11 11:61566097-61586529 fads1 oily_fish Omega_3_pct
-qsub post_gwis/gene_follow_up.sh 11 11:61581675-61635826 fads2 oily_fish Omega_3_pct
-qsub post_gwis/gene_follow_up.sh 11 11:61555602-61562085 tmem258 oily_fish Omega_3_pct
-qsub post_gwis/gene_follow_up.sh 15 15:38542925-38650450 spred1 Omega_3_pct hscrp_log
-qsub post_gwis/gene_follow_up.sh 6 06:31365561-31384090 mica Omega_3_pct hscrp_log
-qsub post_gwis/gene_follow_up.sh 2 02:99059321-99208496 inpp4a fish_oil Omega_3_pct
-qsub post_gwis/gene_follow_up.sh 4 04:88894802-88905563 spp1 fish_oil Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 11 chr11:61555602-61562085 tmem258 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 11 chr11:61566097-61586529 fads1 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 11 chr11:61581675-61635826 fads2 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 11 chr11:61558109-61565716 fen1 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 11 chr11:61518121-61556990 myrf oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 3 chr3:142024449-142168904 xrn1 Omega_3_pct hscrp_log
+qsub post_gwis/gene_follow_up.sh 8 chr8:41118476-41168990 sfrp1 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 8 chr8:89048460-89341717 mmp16 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 6 chr6:31365561-31384090 mica Omega_3_pct hscrp_log
+qsub post_gwis/gene_follow_up.sh 7 chr7:107381942-107403112 cbll1 Omega_3_pct hscrp_log
+qsub post_gwis/gene_follow_up.sh 19 chr19:48109453-48207534 gltscr1 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 6 chr6:117608530-117749018 ros1 oily_fish Omega_3_pct
+qsub post_gwis/gene_follow_up.sh 7 chr7:107299080-107359254 slc26a4 Omega_3_pct hscrp_log
+
+#qsub post_gwis/gene_follow_up.sh 5 05:123395487-123774213 parp8 oily_fish Omega_3_pct
+#qsub post_gwis/gene_follow_up.sh 11 11:61566097-61586529 fads1 oily_fish Omega_3_pct
+#qsub post_gwis/gene_follow_up.sh 11 11:61581675-61635826 fads2 oily_fish Omega_3_pct
+#qsub post_gwis/gene_follow_up.sh 11 11:61555602-61562085 tmem258 oily_fish Omega_3_pct
+#qsub post_gwis/gene_follow_up.sh 15 15:38542925-38650450 spred1 Omega_3_pct hscrp_log
+#qsub post_gwis/gene_follow_up.sh 6 06:31365561-31384090 mica Omega_3_pct hscrp_log
+#qsub post_gwis/gene_follow_up.sh 2 02:99059321-99208496 inpp4a fish_oil Omega_3_pct
+#qsub post_gwis/gene_follow_up.sh 4 04:88894802-88905563 spp1 fish_oil Omega_3_pct
 
 rsync -ravP uger:florez_ukb_projects/ukb-n3/data/processed/gene_followup ../data/processed/
