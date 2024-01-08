@@ -365,12 +365,20 @@ ffq_cat_to_qt <- function(x) {
   )
 }
 
-ffq_fields <- c(cooked_veg = 1289, raw_veg = 1299,
-                fresh_fruit = 1309, dried_fruit = 1319,
-                oily_fish = 1329, nonoily_fish = 1339,
-                prmeat = 1349, poultry = 1359,
-                beef = 1369, lamb = 1379,
-                bread_type = 1448)
+ffq_clean_cont <- function(x) {
+  case_when(  # Data-coding 100373
+    x >= 0 ~ x,
+    x == -10 ~ 0.5,
+    TRUE ~ as.numeric(NA)
+  )
+}
+
+ffq_cat_fields <- c(oily_fish = 1329, nonoily_fish = 1339,
+                    prmeat = 1349, poultry = 1359,
+                    beef = 1369, lamb = 1379)
+ffq_cont_fields <- c(cooked_veg = 1289, raw_veg = 1299,
+                     fresh_fruit = 1309, dried_fruit = 1319)
+ffq_fields <- c(ffq_cat_fields, ffq_cont_fields, bread_type = 1448)
 ffq_long_df <- base_pheno_df %>%
   wrangle_long_data(ffq_fields) %>%
   mutate(whole_bread = case_when(
@@ -379,7 +387,8 @@ ffq_long_df <- base_pheno_df %>%
     TRUE ~ as.numeric(NA)
   )) %>%
   select(-bread_type) %>%
-  mutate(across(-c(id, instance, whole_bread), ffq_cat_to_qt))
+  mutate(across(names(ffq_cat_fields), ffq_cat_to_qt)) %>%
+  mutate(across(names(ffq_cont_fields), ffq_clean_cont))
 
 saveRDS(ffq_long_df, "ffq_long_df.rds")
 

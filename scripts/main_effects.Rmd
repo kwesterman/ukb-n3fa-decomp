@@ -19,6 +19,21 @@ phenos <- read_csv("../data/processed/ukb_phenos_longitudinal_unrelated.csv")
 
 We will focus on the relationship between the Mediterranean diet pattern, and specifically its sub-components of fish and omega-3 fatty acid intake, and two outcomes (hsCRP and TG, both log-transformed). These relationships have been established in prior observational and interventional research, so allow for the evaluation of the impact of various covariate adjustments, regression modeling strategies, and the impact of longitudinal data.
 
+```{r hscrp-correlations}
+expand_grid(
+  v1 = c("hscrp_log", "tg_log", "bmi", "age"),
+  v2 = c("hscrp_log", "tg_log", "bmi", "age")
+) %>%
+  rowwise() %>%
+  mutate(corr = cor(phenos[[v1]], phenos[[v2]], use = "pairwise.complete.obs"),
+         corr = round(corr, 2)) %>%
+  ggplot(aes(x = v1, y = v2, fill = corr)) +
+  geom_tile() +
+  geom_text(aes(label = corr)) +
+  scale_fill_continuous(name = "Pearson\ncorrelation") +
+  theme(axis.title = element_blank())
+```
+
 ```{r prep-diet-bm-regressions}
 run_diet_bm_lm <- function(dv, bm, covars = c("age", "sex"), df = phenos,
                            std = FALSE) {
@@ -436,12 +451,17 @@ neg_control_obj <- test_mediation(
 )
 
 print("Primary oily fish mediation test:")
+plot(main_med_obj, main = "Primary oily fish mediation test", xlim = c(-0.5, 0))
 summary(main_med_obj)
+plot(unadj_med_obj, main = "Minimally-adjusted mediation test", xlim = c(-0.5, 0))
 print("Minimally-adjusted mediation test:")
 summary(unadj_med_obj)
 print("Non-oily fish mediation test:")
+plot(no_med_obj, main = "Non-oily fish mediation test", xlim = c(-0.5, 0))
 summary(no_med_obj)
 print("Raw vegetable intake mediation test (healthy lifestyle negative control):")
+plot(neg_control_obj, main = "Raw vegetable intake mediation test (healthy lifestyle negative control)", 
+     xlim = c(-0.02, 0))
 summary(neg_control_obj)
 ```
 
