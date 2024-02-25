@@ -5,7 +5,8 @@ title: "Main effects"
 
 ```{r setup, include=F}
 knitr::opts_chunk$set(echo = FALSE, message = FALSE,warning = FALSE, 
-                      fig.path = "../output/main_effects/")
+                      fig.path = "../output/main_effects/",
+                      cache.path = "../cache/main_effects/")
 suppressMessages(silent <- lapply(
   c("knitr", "kableExtra", "tidyverse", "lme4", "lmerTest", "cowplot", "patchwork"), 
   library, character.only = TRUE))
@@ -99,7 +100,7 @@ phenos <- phenos %>%
          ageBySex_std = as.vector(scale(ageBySex)),  # To avoid scale issues affecting LMM convergence
          income = ifelse(is.na(income), "Missing", income),  # Add missing indicators to SES & HL covariates rather than drop them
          education = ifelse(is.na(education), "Missing", education),
-         across(all_of(ffq_covars), 
+         across(all_of(c(ffq_covars, "bmi")), 
                 ~ ifelse(is.na(.), median(., na.rm = TRUE), .)))
 ```
 
@@ -141,7 +142,7 @@ bl_lm_res_df %>%
   facet_wrap(~bm, nrow = 2, scales = "free_y") +
   theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
 
-expand_grid(
+fish_var_corr_df <- expand_grid(
   var1 = fish_variables,
   var2 = fish_variables
 ) %>%
@@ -151,7 +152,8 @@ expand_grid(
   unnest(corr_fit) %>%
   mutate(across(c(var1, var2), 
                 ~ factor(., levels = fish_variables, 
-                         labels = fish_variables_clean))) %>%
+                         labels = fish_variables_clean)))
+fish_var_corr_df %>%
   ggplot(aes(x = var1, y = var2, fill = estimate)) +
   geom_tile() + 
   scale_fill_gradient2(name = "Pearson\ncorrelation") +
@@ -185,7 +187,7 @@ avg_lm_res_df <- dv_bm_permutations %>%
   unnest(model_res)
 ```
 
-```{r lmms}
+```{r lmms, cache = 1}
 lmm_phenos <- phenos %>%
   select(id, instance, all_of(c(fish_variables, key_bms, all_covars))) %>%
   group_by(id) %>%
@@ -297,7 +299,8 @@ We also examine results from a "decomposed" model that includes terms estimating
 
 ```{r ancestry-heterogeneity}
 ancestry_df <- read_csv("../data/processed/ukb_phenos_longitudinal_panUKBB.csv", 
-                        col_select = c("id", "ancestry"))
+                        col_select = c("id", "ancestry")) %>%
+  distinct()
 
 ancestry_phenos <- bl_phenos %>%
   inner_join(ancestry_df, by = "id")
@@ -320,15 +323,15 @@ ancestry_lm_str <- paste0("hscrp_log ~ oily_fish + ",
                            " + ancestry * oily_fish")
 ancestry_lm_fit <- lm(as.formula(ancestry_lm_str), data = ancestry_phenos)
 
-plot_data <- marginaleffects::datagrid(
+ancestry_plot_data <- marginaleffects::datagrid(
   model = ancestry_lm_fit, 
   oily_fish = seq(min(ancestry_phenos$oily_fish, na.rm = TRUE),
                   max(ancestry_phenos$oily_fish, na.rm = TRUE), 0.1),
   ancestry = na.omit(unique(ancestry_phenos$ancestry))
-)
+) %>%
+  mutate(pred = predict(ancestry_lm_fit, newdata = .))
 
-plot_data %>%
-  mutate(pred = predict(ancestry_lm_fit, newdata = .)) %>%
+ancestry_plot_data %>%
   ggplot(aes(x = oily_fish, y = pred, color = ancestry)) +
   geom_line() +
   labs(x = "Oily fish", y = "Predicted log(hsCRP)",
@@ -339,13 +342,52 @@ broom::tidy(ancestry_lm_fit) %>%
   kable(caption = "Subset of regression results including oily fish x ancestry interaction terms") %>%
   kable_styling(full_width = FALSE)
 
-# ancestry_lmm_intOnly_str <- paste0("hscrp_log ~ oily_fish + ", 
-#                                    paste0(all_covars, collapse=" + "), 
-#                                    " + (1|ancestry)")
-# ancestry_lmm_intOnly_fit <- lmer(as.formula(ancestry_lmm_intOnly_str), 
-#                                  data = ancestry_phenos)
-# 
-# anova(ancestry_lmm_intOnly_fit, ancestry_lmm_fit)
+
+ancestry_lm_specs <- expand_grid(
+  e_name = c("oily_fish", "N3FA", "fish_oil_touchscreen", "fish_oil_verbal", "Omega_3_pct"),
+  y_name = c("Omega_3_pct", "hscrp_log", "tg_log", "ldl_statinadj", "apoB_statinadj", "hdl")
+) %>%
+  filter(e_name != y_name)
+
+run_ancestry_lm <- function(e, y) {
+  ancestry_phenos$e <- ancestry_phenos[[e]]
+  ancestry_phenos$y <- ancestry_phenos[[y]]
+  ancestry_lm_str <- paste0("y ~ e + ", 
+                            paste0(all_covars, collapse=" + "), 
+                            " + ancestry * e")
+  ancestry_lm_fit <- lm(as.formula(ancestry_lm_str), data = ancestry_phenos)
+  
+  ancestry_plot_data <- marginaleffects::datagrid(
+    model = ancestry_lm_fit, 
+    e = seq(min(ancestry_phenos[[e]], na.rm = TRUE),
+                   max(ancestry_phenos[[e]], na.rm = TRUE), length.out = 10),
+    ancestry = na.omit(unique(ancestry_phenos$ancestry))
+  ) %>%
+    mutate(pred = predict(ancestry_lm_fit, newdata = .))
+  
+  ancestry_plot_data
+}
+
+a <- ancestry_lm_specs %>%
+  rowwise() %>%
+  mutate(pred_data = list(run_ancestry_lm(e_name, y_name))) %>%
+  unnest(pred_data)
+
+a %>%
+  filter(ancestry %in% c("EUR", "AFR")) %>%
+  filter(e_name == "Omega_3_pct") %>%
+  ggplot(aes(x = e, y = pred, color = ancestry)) +
+  geom_line() +
+  facet_wrap(vars(y_name), scales = "free")
+  # facet_wrap(vars(e_name, y_name), scales = "free")
+
+ancestry_phenos %>% 
+  filter(ancestry %in% c("EUR", "AFR")) %>%
+         # Omega_3_pct > 2, Omega_3_pct < 10) %>%
+  ggplot(aes(x = oily_fish, y = ldl_statinadj, color = ancestry)) +
+  geom_smooth()
+
+summary(lm(ldl_statinadj ~ Omega_3_pct * ancestry + age + age_squared + sex + ageBySex_std + ac + income*ancestry + education*ancestry + fresh_fruit*ancestry + raw_veg*ancestry + cooked_veg + alcohol, data = ancestry_phenos))
 ```
 
 Predicted slopes for the oily fish-hsCRP relationship look similar across Pan-UKBB ancestry groups (from a model with random intercepts and slopes for ancestry groups) other than AMR, but a likelihood ratio test doesn't show meaningful evidence for significance of this random slope.
@@ -387,7 +429,7 @@ pufa_metabolites <- c("Omega_3", "Omega_6",
 ```
 
 ```{r nmr-corrs}
-nmr_corr_df <- expand_grid(
+pheno_corr_df <- expand_grid(
   var1 = c(fish_variables, key_bms, pufa_metabolites),
   var2 = c(fish_variables, key_bms, pufa_metabolites)
 ) %>%
@@ -396,7 +438,7 @@ nmr_corr_df <- expand_grid(
                                               bl_phenos[[var2]])))) %>%
   unnest(corr_fit)
 
-nmr_corr_df %>%
+pheno_corr_df %>%
   mutate(across(c(var1, var2), ~ fct_relevel(., c(fish_variables, key_bms, pufa_metabolites)))) %>%
   ggplot(aes(x = var1, y = var2, fill = estimate)) +
   geom_tile() + 
@@ -404,7 +446,7 @@ nmr_corr_df %>%
   labs(x = "", y = "") +
   theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
 
-nmr_corr_df %>%
+pheno_corr_df %>%
   filter(var1 == "oily_fish",
          var2 %in% pufa_metabolites) %>%
   mutate(estimate = round(estimate, 2)) %>%
@@ -453,8 +495,8 @@ neg_control_obj <- test_mediation(
 print("Primary oily fish mediation test:")
 plot(main_med_obj, main = "Primary oily fish mediation test", xlim = c(-0.5, 0))
 summary(main_med_obj)
-plot(unadj_med_obj, main = "Minimally-adjusted mediation test", xlim = c(-0.5, 0))
 print("Minimally-adjusted mediation test:")
+plot(unadj_med_obj, main = "Minimally-adjusted mediation test", xlim = c(-0.5, 0))
 summary(unadj_med_obj)
 print("Non-oily fish mediation test:")
 plot(no_med_obj, main = "Non-oily fish mediation test", xlim = c(-0.5, 0))
@@ -463,24 +505,53 @@ print("Raw vegetable intake mediation test (healthy lifestyle negative control):
 plot(neg_control_obj, main = "Raw vegetable intake mediation test (healthy lifestyle negative control)", 
      xlim = c(-0.02, 0))
 summary(neg_control_obj)
+
+fish_oil_med_obj <- test_mediation(
+  "fish_oil_touchscreen", "Omega_3_pct", "hscrp_log", all_covars, bl_phenos
+)
+summary(fish_oil_med_obj)
+
+tg_med_obj <- test_mediation(
+  "oily_fish", "Omega_3_pct", "tg_log", all_covars, bl_phenos
+)
+summary(tg_med_obj)
+ldl_med_obj <- test_mediation(
+  "oily_fish", "Omega_3_pct", "ldl_statinadj", all_covars, bl_phenos
+)
+summary(ldl_med_obj)
+ldl_med_bmiAdj_obj <- test_mediation(
+  "oily_fish", "Omega_3_pct", "ldl_statinadj", c(all_covars, "bmi"), bl_phenos
+)
+summary(ldl_med_bmiAdj_obj)
+
+dha_med_obj <- test_mediation(
+  "oily_fish", "DHA_pct", "hscrp_log", all_covars, bl_phenos
+)
+summary(dha_med_obj)
+bl_phenos$EPA_pct <- bl_phenos$Omega_3_pct - bl_phenos$DHA_pct
+epa_med_obj <- test_mediation(
+  "oily_fish", "EPA_pct", "hscrp_log", all_covars, bl_phenos
+)
+summary(epa_med_obj)
 ```
 
 These mediation results suggest that approximately all of the oily fish-hsCRP relationship is mediated through the effect of oily fish on blood N3 levels. This is not surprising mechanistically, and even suggests that blood N3 concentrations (or percentage) might be a more effective measure of the biologically relevant components of the fish intake exposure than self-reported components. Notably, a second mediation analysis that contains only minimal covariate adjustment (age & sex) retains a modestly significant ADE and a proportion mediated that is less than one. This is a nice negative control of sorts, because we expect blood N3 levels to mediate the effect of fish intake, but not the effect of other lifestyle and socioeconomic factors correlated with fish intake.
 
-# Export datasets for interaction modeling
+# Export datasets for interaction modeling and manuscript
 
-```{r export}
-gwis_bms <- "hscrp_log"
+```{r export-modeling}
+gwis_bms <- c("hscrp_log", "tg_log", "ldl_statinadj")
 gwis_variables <- c("id", 
                     gwis_bms, 
-                    c(fish_variables, "fish_oil"), 
+                    c(fish_variables, "fish_oil", "n3fa_ffq"), 
                     pufa_metabolites, 
                     all_covars, paste0("gPC", 1:10))
 
 gwis_df <- phenos %>%
   filter(instance == 0) %>%  # Because longitudinal doesn't appear to provide much value here
   filter(if_all(all_of(c(gwis_bms, all_covars)), ~ !is.na(.))) %>%
-  mutate(fish_oil = fish_oil_touchscreen)
+  mutate(fish_oil = fish_oil_touchscreen,
+         n3fa_ffq = as.vector(scale(oily_fish) + 0.5 * scale(fish_oil_touchscreen)))
 
 mm_form <- as.formula(paste("~ 1 + ", paste(gwis_variables, collapse = " + ")))
 gwis_mat <- model.matrix(
@@ -489,10 +560,23 @@ gwis_mat <- model.matrix(
 )[, -1]  # Need intercept in formula to drop level from each factor, but don't want to keep it
 colnames(gwis_mat) <- make.names(colnames(gwis_mat))
 gwis_covars <- setdiff(colnames(gwis_mat), 
-                       c("id", key_bms, c(fish_variables, "fish_oil"), 
+                       c("id", 
+                         c(gwis_bms, "n3fa_ffq"), 
+                         c(fish_variables, "fish_oil"), 
                          pufa_metabolites))
 write(gwis_covars, "../data/processed/gwis_covariates.txt")
 write_csv(as_tibble(gwis_mat), "../data/processed/ukb_gwis_phenos.csv")
+```
+
+```{r export-manuscript}
+saveRDS(covar_sets, "../data/processed/manuscript/covar_sets_list.rds")
+saveRDS(covar_set_labels, "../data/processed/manuscript/covar_set_labels.rds")
+saveRDS(bl_phenos, "../data/processed/manuscript/baseline_phenos.rds")
+saveRDS(bl_lm_res_df, "../data/processed/manuscript/bl_lm_res_df.rds")
+saveRDS(pheno_corr_df, "../data/processed/manuscript/pheno_corr_df.rds")
+saveRDS(ancestry_plot_data, "../data/processed/manuscript/ancestry_plot_data.rds")
+saveRDS(list(main = main_med_obj, unadj = unadj_med_obj, nc = neg_control_obj),
+        "../data/processed/manuscript/med_obj_list.rds")
 ```
 
 # To-do

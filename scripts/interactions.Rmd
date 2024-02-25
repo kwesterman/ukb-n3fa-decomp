@@ -7,7 +7,7 @@ title: "Interaction effects"
 knitr::opts_chunk$set(echo = FALSE, message = FALSE,
                       fig.path = "../output/interactions/")
 suppressMessages(silent <- lapply(
-  c("knitr", "kableExtra", "tidyverse", "lme4", "lmerTest", "cowplot", "patchwork"), 
+  c("knitr", "kableExtra", "tidyverse", "cowplot", "patchwork"), 
   library, character.only = TRUE))
 ```
 
@@ -225,13 +225,14 @@ hscrp_gc <- read_table("../data/processed/ldsc/oily_fish_fish_oil_hscrp_log.log"
 n3_gc <- read_table("../data/processed/ldsc/oily_fish_fish_oil_Omega_3_pct.log", 
                        skip = 60, n_max = 1)
 
-bind_rows(list(
+gc_summary_df <- bind_rows(list(
   hscrp_gc,
   n3_gc
 )) %>%
-  select(p1, p2, rg, p) %>%
+  select(p1, p2, rg, se, p)
+gc_summary_df %>%
   mutate(across(c(p1, p2), basename),
-         across(c(rg, p), ~ signif(., 2)))
+         across(c(rg, se, p), ~ signif(., 2)))
 ```
 
 We don't see any significant genetic correlation for the interaction estimates in this case.
@@ -342,7 +343,48 @@ gene_summary_df %>%
 
 # Gene-specific follow-up
 
-```{r prep-gene-followup}
+```{r gene-followup-functions}
+make_double_strat_plot <- function(top_snp, e, y, df, plt_title) {
+  plt_df <- df %>%
+    select(all_of(c(G = {{top_snp}}, E = {{e}}, Y = {{y}}))) 
+  if (length(unique(plt_df$E)) > 10) {
+    plt_df$E <- cut(plt_df$E, 
+                    quantile(plt_df$E, seq(0, 1, length.out = 5), na.rm = TRUE),
+                    include.lowest = TRUE)
+  } else {
+    plt_df$E <- factor(round(plt_df$E, 2))
+  }
+  plt_df %>%
+    mutate(G = factor(round(G))) %>%
+    filter(!is.na(G), !is.na(E), !is.na(Y)) %>%
+    group_by(G, E) %>%
+    summarise(m = mean(Y),
+              se = sd(Y) / sqrt(n())) %>%
+    mutate(l95 = m - 1.96 * se,
+           u95 = m + 1.96 * se) %>%
+    ggplot(aes(x = G, y = m, color = E)) +
+    geom_point(position = position_dodge(width = 0.2)) +
+    geom_errorbar(aes(ymin = l95, ymax = u95), width = 0.2,
+                  position = position_dodge(width = 0.2)) +
+    labs(x = "Genotype", y = "Mean of Y (95% CI)", 
+         title = plt_title)
+}
+
+make_g_strat_plot <- function(top_snp, e, y, df, plt_title) {
+  plt_df <- df %>%
+    select(all_of(c(G = {{top_snp}}, E = {{e}}, Y = {{y}}))) 
+  plt_df %>%
+    mutate(G = factor(round(G))) %>%
+    filter(!is.na(G), !is.na(E), !is.na(Y),
+           E <= quantile(E, 0.999, na.rm = TRUE)) %>%
+    group_by(G) %>%
+    filter(n() > 5) %>%
+    ggplot(aes(x = E, y = Y, color = G)) +
+    geom_smooth(method = "lm") +
+    labs(x = "Exposure (cut off at 99th percentile)", y = "Y", 
+         title = plt_title)
+}
+
 run_gxe <- function(g, e, y, 
                     covars = c("age", "sex"), 
                     df = phenos,
@@ -360,16 +402,7 @@ run_gxe <- function(g, e, y,
   lm_summ
 }
 
-make_gene_snp_plot <- function(ss_df, p_col = "robust_P_Value_Interaction") {
-  ss_df %>%
-    mutate(nlp_int = -log10(!!sym(p_col))) %>%
-    ggplot(aes(x = POS, y = nlp_int)) +
-    geom_point() +
-    geom_text(aes(label = RSID)) +
-    labs(y=expression(-log[10](p[int])))
-}
-
-make_int_effect_plot <- function(all_maf_ss_df, e, top_rsid) {
+make_int_effect_plot <- function(all_maf_ss_df, e, top_snpid) {
   beta_vec <- all_maf_ss_df[[paste0("Beta_G-", e)]]
   ylims <- median(beta_vec, na.rm = TRUE) + c(-5, 5) * mad(beta_vec, na.rm = TRUE)
   all_maf_ss_df %>%
@@ -378,17 +411,17 @@ make_int_effect_plot <- function(all_maf_ss_df, e, top_rsid) {
     arrange(int_estimate) %>%
     mutate(l95 = int_estimate - 1.96 * int_se,
            u95 = int_estimate + 1.96 * int_se,
-           top_gwis = (RSID == gsub("_.*", "", top_rsid)),
+           top_gwis = (SNPID == gsub("_.*", "", top_snpid)),
            SNPID = factor(SNPID, levels = SNPID)) %>%
     ggplot(aes(x = SNPID, y = int_estimate)) +
     geom_point(aes(color = top_gwis)) +
     geom_errorbar(aes(ymin=l95, ymax=u95, color = top_gwis), width = 0.2) +
     geom_hline(yintercept = 0, color = "gray") +
-    # geom_text(aes(label = RSID)) +
+    # geom_text(aes(label = SNPID)) +
     scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
                        breaks = c(TRUE),
                        labels = c("Top variant from GWIS")) +
-    labs(x = "rsID", y = "Interaction effect estimate (95% CI)") +
+    labs(x = "SNPID", y = "Interaction effect estimate (95% CI)") +
     # coord_cartesian(ylim = ylims) +
     theme(axis.text.x = element_blank(),
           # axis.text.x = element_text(angle = 45, hjust = 0.9),
@@ -396,34 +429,7 @@ make_int_effect_plot <- function(all_maf_ss_df, e, top_rsid) {
           legend.key = element_blank())
 }
 
-make_int_effect_chr_plot <- function(all_maf_ss_df, e, top_rsid) {
-  beta_vec <- all_maf_ss_df[[paste0("Beta_G-", e)]]
-  ylims <- median(beta_vec, na.rm = TRUE) + c(-5, 5) * mad(beta_vec, na.rm = TRUE)
-  all_maf_ss_df %>%
-    mutate(int_estimate = !!sym(paste0("Beta_G-", e)),
-           int_se = !!sym(paste0("SE_Beta_G-", e))) %>%
-    arrange(int_estimate) %>%
-    mutate(l95 = int_estimate - 1.96 * int_se,
-           u95 = int_estimate + 1.96 * int_se,
-           top_gwis = (RSID == gsub("_.*", "", top_rsid)),
-           SNPID = factor(SNPID, levels = SNPID)) %>%
-    ggplot(aes(x = POS, y = int_estimate)) +
-    geom_point(aes(color = top_gwis)) +
-    geom_errorbar(aes(ymin=l95, ymax=u95, color = top_gwis), width = 0.2) +
-    geom_hline(yintercept = 0, color = "gray") +
-    # geom_text(aes(label = RSID)) +
-    scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
-                       breaks = c(TRUE),
-                       labels = c("Top variant from GWIS")) +
-    labs(x = "rsID", y = "Interaction effect estimate (95% CI)") +
-    # coord_cartesian(ylim = ylims) +
-    theme(axis.text.x = element_blank(),
-          # axis.text.x = element_text(angle = 45, hjust = 0.9),
-          legend.position = "bottom", legend.title = element_blank(), 
-          legend.key = element_blank())
-}
-
-make_int_effect_maf_plot <- function(all_maf_ss_df, e, top_rsid) {
+make_int_effect_maf_plot <- function(all_maf_ss_df, e, top_snpid) {
   beta_vec <- all_maf_ss_df[[paste0("Beta_G-", e)]]
   ylims <- median(beta_vec, na.rm = TRUE) + c(-5, 5) * mad(beta_vec, na.rm = TRUE)
   all_maf_ss_df %>%
@@ -432,17 +438,19 @@ make_int_effect_maf_plot <- function(all_maf_ss_df, e, top_rsid) {
            int_se = !!sym(paste0("SE_Beta_G-", e))) %>%
     mutate(l95 = int_estimate - 1.96 * int_se,
            u95 = int_estimate + 1.96 * int_se,
-           top_gwis = (RSID == gsub("_.*", "", top_rsid)),
+           top_gwis = (SNPID == gsub("_.*", "", top_snpid)),
            MAF = pmin(AF, 1 - AF)) %>%
-    arrange(top_gwis) %>%
-    ggplot(aes(x = MAF, y = int_estimate)) +
-    geom_point(aes(color = top_gwis)) +
-    geom_errorbar(aes(color = top_gwis, ymin=l95, ymax=u95), width = 0) +
+    # arrange(top_gwis) %>%
+    arrange(annot != "intronic") %>%
+    ggplot(aes(x = MAF, y = int_estimate, color = annot)) +
+    geom_point() +
+    # geom_point(aes(color = top_gwis)) +
+    geom_errorbar(aes(ymin=l95, ymax=u95), width = 0, color = "black", alpha = 0.5) +
     geom_hline(yintercept = 0, color="gray") +
     scale_x_log10() +
-    scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
-                       breaks = c(TRUE),
-                       labels = c("Top variant from GWIS")) +
+    # scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
+    #                    breaks = c(TRUE),
+    #                    labels = c("Top variant from GWIS")) +
     labs(x = "MAF", y = "Interaction effect estimate (95% CI)") +
     # coord_cartesian(ylim = ylims) +
     theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
@@ -450,19 +458,22 @@ make_int_effect_maf_plot <- function(all_maf_ss_df, e, top_rsid) {
           legend.key = element_blank())
 }
 
-make_int_effect_cond_plot <- function(ss_df, ss_cond_df, e, top_rsid) {
+make_int_effect_cond_plot <- function(ss_df, ss_cond_df, e, top_snpid) {
   beta_vec <- ss_cond_df[[paste0("Beta_G-", e)]]
   ylims <- median(beta_vec, na.rm = TRUE) + c(-5, 5) * mad(beta_vec, na.rm = TRUE)
   bind_rows(list(unconditional = ss_df, conditional = ss_cond_df), 
             .id = "adjustment") %>%
     filter(SE_Beta_G < (100 * median(SE_Beta_G))) %>%
+    group_by(SNPID) %>%
+    filter(any(P_Value_Interaction < 0.05)) %>%
+    ungroup() %>%
     mutate(int_estimate = !!sym(paste0("Beta_G-", e)),
            int_se = !!sym(paste0("SE_Beta_G-", e))) %>%
-    select(SNPID, RSID, AF, adjustment, int_estimate, int_se) %>%
+    select(SNPID, AF, adjustment, int_estimate, int_se) %>%
     arrange(int_estimate) %>%
     mutate(l95 = int_estimate - 1.96 * int_se,
            u95 = int_estimate + 1.96 * int_se,
-           top_gwis = (RSID == gsub("_.*", "", top_rsid)),
+           top_gwis = (SNPID == gsub("_.*", "", top_snpid)),
            MAF = pmin(AF, 1 - AF),
            SNPID = factor(SNPID, levels = unique(SNPID[adjustment == "unconditional"]))) %>%
     filter(!top_gwis) %>%
@@ -471,22 +482,22 @@ make_int_effect_cond_plot <- function(ss_df, ss_cond_df, e, top_rsid) {
     geom_errorbar(aes(ymin = l95, ymax = u95), width = 0, 
                   position = position_dodge(width = 0.1)) +
     geom_hline(yintercept = 0, color = "gray") + 
-    labs(x = "Interaction effect (95% CI) - unconditional", 
-         y = "Interaction effect (95% CI) - conditional on top variant") +
+    labs(x = "", 
+         y = "Interaction effect (95% CI)") +
     # coord_cartesian(ylim = ylims) +
     theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
           legend.position = "bottom", legend.title = element_blank(), 
           legend.key = element_blank())
 }
 
-make_int_p_cond_plot <- function(ss_df, ss_cond_df, e, top_rsid) {
+make_int_p_cond_plot <- function(ss_df, ss_cond_df, e, top_snpid) {
   bind_rows(list(unconditional = ss_df, conditional = ss_cond_df), 
             .id = "adjustment") %>%
     filter(SE_Beta_G < (100 * median(SE_Beta_G))) %>%
     mutate(int_nlp = -log10(P_Value_Interaction)) %>%
-    select(SNPID, RSID, AF, adjustment, int_nlp) %>%
+    select(SNPID, SNPID, AF, adjustment, int_nlp) %>%
     pivot_wider(names_from = "adjustment", values_from = "int_nlp") %>%
-    mutate(top_gwis = (RSID == gsub("_.*", "", top_rsid)),
+    mutate(top_gwis = (SNPID == gsub("_.*", "", top_snpid)),
            MAF = pmin(AF, 1 - AF)) %>%
     filter(!top_gwis) %>%
     ggplot(aes(x = unconditional, y = conditional, color = MAF)) +
@@ -499,25 +510,6 @@ make_int_p_cond_plot <- function(ss_df, ss_cond_df, e, top_rsid) {
           legend.position = "bottom")
 }
 
-make_strat_plot <- function(top_snp, e, y, df) {
-  df %>%
-    select(all_of(c(G = {{top_snp}}, E = {{e}}, Y = {{y}}))) %>%
-    mutate(G = factor(round(G)),
-           E = factor(round(E, 2))) %>%
-    filter(!is.na(G), !is.na(E), !is.na(Y)) %>%
-    group_by(G, E) %>%
-    summarise(m = mean(Y),
-              se = sd(Y) / sqrt(n())) %>%
-    mutate(l95 = m - 1.96 * se,
-           u95 = m + 1.96 * se) %>%
-    ggplot(aes(x = G, y = m, color = E)) +
-    geom_point(position = position_dodge(width = 0.2)) +
-    geom_errorbar(aes(ymin = l95, ymax = u95), width = 0.2,
-                  position = position_dodge(width = 0.2)) +
-    labs(x = "Genotype", y = "Mean of Y (95% CI)", 
-         title = "Stratified interaction plot for top SNP")
-}
-
 run_gene_follow_up <- function(gene, e, y, base_covars = covar_sets$ffqAdj,
                                snp_idx = 1) {
   
@@ -525,10 +517,8 @@ run_gene_follow_up <- function(gene, e, y, base_covars = covar_sets$ffqAdj,
   
   e_regression <- if (e == "fish_oil") "fish_oil_touchscreen" else e
   
-  gwis_sumstats_df <- read_tsv(paste0("../data/processed/gene_followup/", 
-                                      e, "_", y, "_", gene, "_subset"))
-  gene_snp_plt <- make_gene_snp_plot(gwis_sumstats_df)
-  print(gene_snp_plt)
+  # gwis_sumstats_df <- read_tsv(paste0("../data/processed/gene_followup/", 
+  #                                     e, "_", y, "_", gene, "_subset"))
   
   top_snp_df <- read_tsv(paste0("../data/processed/gene_followup/", 
                                  e, "_", y, "_", gene, "_top_snp.raw")) %>%
@@ -537,8 +527,11 @@ run_gene_follow_up <- function(gene, e, y, base_covars = covar_sets$ffqAdj,
   top_snp <- names(top_snp_df)[snp_idx + 1]
   regression_df <- inner_join(phenos, top_snp_df, by = "id")
   
-  strat_plt <- make_strat_plot(top_snp, e_regression, y, regression_df) 
-  print(strat_plt)
+  double_strat_plt <- make_double_strat_plot(top_snp, e_regression, y, regression_df,
+                                             "Stratified interaction plot for top SNP")
+  g_strat_plt <- make_g_strat_plot(top_snp, e_regression, y, regression_df,
+                                   "Stratified interaction plot for top SNP")
+  print(double_strat_plt + g_strat_plt)
   
   sensitivity_covar_list <- list(
     primary = base_covars,
@@ -573,9 +566,26 @@ run_gene_follow_up <- function(gene, e, y, base_covars = covar_sets$ffqAdj,
   
   all_maf_sumstats_df <- read_tsv(paste0("../data/processed/gene_followup/", 
                                          e, "_", y, "_", gene, "_regressions"))
+  
+  all_maf_sumstats_df %>%
+    mutate(CHR = gsub("^chr", "", CHR)) %>%
+    select(CHR, start = POS, end= POS, Non_Effect_Allele, Effect_Allele, SNPID) %>%
+    write_tsv(paste0("../data/processed/annovar/", gene, "_annovar_input.tsv"))
+  system(paste0("post_gwis/run_annovar.sh ", gene))
+  variant_annot_df <- read_tsv(
+    paste0("../data/processed/annovar/", gene, "_variants.variant_function"),
+    col_names = c("annot", "gene", "chr", "start", "end", "REF", "ALT", "SNPID")
+  ) %>%
+    select(SNPID, annot)
+  all_maf_sumstats_df <- all_maf_sumstats_df %>%
+    left_join(variant_annot_df, by = "SNPID") %>%
+    mutate(annot = ifelse(is.na(annot), "unannotated", annot))
+  
   all_maf_cond_sumstats_df <- read_tsv(paste0("../data/processed/gene_followup/", 
-                                              e, "_", y, "_", gene, "_regressions_cond"))
-  int_effect_chr_plt <- make_int_effect_chr_plot(all_maf_sumstats_df, e, top_snp)
+                                              e, "_", y, "_", gene, "_regressions_cond")) %>%
+    left_join(variant_annot_df, by = "SNPID") %>%
+    mutate(annot = ifelse(is.na(annot), "unannotated", annot))
+  
   int_effect_maf_plt <- make_int_effect_maf_plot(all_maf_sumstats_df, e, top_snp)
   # int_effect_cond_maf_plt <- make_int_effect_maf_plot(
   #   filter(all_maf_cond_sumstats_df, 
@@ -588,25 +598,42 @@ run_gene_follow_up <- function(gene, e, y, base_covars = covar_sets$ffqAdj,
   int_p_cond_plt <- make_int_p_cond_plot(all_maf_sumstats_df, 
                                          all_maf_cond_sumstats_df,
                                          e, top_snp)
-  print(int_effect_chr_plt)
+
   print(int_effect_maf_plt)
-  # print(int_effect_cond_maf_plt)
   print(int_effect_cond_plt)
   print(int_p_cond_plt)
   
   beta_int_col <- paste0("Beta_G-", e_regression)
   top_cond_sumstats_df <- all_maf_cond_sumstats_df %>%
     filter(SE_Beta_G < (100 * median(SE_Beta_G))) %>%
-    arrange(desc(abs(!! sym(beta_int_col)))) %>%
-    select(SNPID, CHR, POS, Effect_Allele, 
-           {{beta_int_col}}, P_Value_Interaction, P_Value_Marginal) %>%
-    head()
-  top_cond_sumstats_df %>%
-    kable(caption = "Top variants in conditional analysis")
+    mutate(MAF = pmin(AF, 1 - AF)) %>%
+    # arrange(desc(abs(!! sym(beta_int_col)))) %>%
+    arrange(P_Value_Interaction) %>%
+    select(SNPID, 
+           # CHR, POS, Effect_Allele, 
+           MAF, annot,
+           {{beta_int_col}}, 
+           `P-int` = P_Value_Interaction, `P-marg` = P_Value_Marginal) %>%
+    head(10)
+  print("Top variants in conditional analysis")
+  print(top_cond_sumstats_df)
+  
+  top_cond_snp_df <- read_tsv(paste0("../data/processed/gene_followup/", 
+                                     e, "_", y, "_", gene, "_top_cond_snp.raw")) %>%
+    select(id = IID, last_col()) %>%
+    mutate(id = as.character(id))
+  top_cond_snp <- names(top_cond_snp_df)[snp_idx + 1]
+  regression_df <- inner_join(phenos, top_cond_snp_df, by = "id")
+  cond_double_strat_plt <- make_double_strat_plot(top_cond_snp, e_regression, y, regression_df,
+                                                  "Stratified interaction plot for top conditional rare SNP")
+  cond_g_strat_plt <- make_g_strat_plot(top_cond_snp, e_regression, y, regression_df,
+                                        "Stratified interaction plot for top conditional rare SNP")
+  print(cond_double_strat_plt + cond_g_strat_plt)
 }
+```
 
-phenos <- read_csv("../data/processed/ukb_phenos_longitudinal_unrelated.csv") %>%
-  filter(instance == 0) %>%
+```{r prep-gene-followup}
+phenos <- readRDS("../data/processed/manuscript/baseline_phenos.rds") %>%  # Already covariate-imputed and subsetted to baseline instance
   mutate(id = as.character(id))
 
 minimal_covars <- c("age", "age_squared", "sex", "ageBySex")
@@ -652,9 +679,9 @@ run_gene_follow_up("fen1", "oily_fish", "Omega_3_pct")
 
 ```{r upstream-genes}
 run_gene_follow_up("sfrp1", "oily_fish", "Omega_3_pct")
-run_gene_follow_up("mmp16", "oily_fish", "Omega_3_pct")
+# run_gene_follow_up("mmp16", "oily_fish", "Omega_3_pct")
 run_gene_follow_up("gltscr1", "oily_fish", "Omega_3_pct")
-run_gene_follow_up("ros1", "oily_fish", "Omega_3_pct")
+# run_gene_follow_up("ros1", "oily_fish", "Omega_3_pct")
 ```
 
 ## "Downstream" genes (N3 % -> hsCRP)
@@ -665,7 +692,6 @@ run_gene_follow_up("mica", "Omega_3_pct", "hscrp_log")
 run_gene_follow_up("cbll1", "Omega_3_pct", "hscrp_log")
 run_gene_follow_up("slc26a4", "Omega_3_pct", "hscrp_log")
 ```
-
 
 ## rs149473 (tentatively assigned to *LINC00170*)
 
@@ -735,7 +761,7 @@ env_params <- data.frame(
 )
 
 run_simulations <- function(sp, pp, gp, ep, s2r) {
-    system("rm output.csv")  # Just to be sure (since ESPRESSO.GxE doesn't overwrite)
+    system("rm -f output.csv")  # Just to be sure (since ESPRESSO.GxE doesn't overwrite)
     capture.output(run.espresso.GxE(sp, pp, gp, ep, s2r))
     results <- suppressWarnings(read_delim("output.csv", delim = ";"))
     new_colnames <- c(names(results)[1:34], 1:4, names(results)[35:38])
@@ -744,6 +770,8 @@ run_simulations <- function(sp, pp, gp, ep, s2r) {
       setNames(new_colnames) %>%
       select(numsubjects, interaction.efkt, MAF, env.reliability,
              empirical.power)
+    system("rm output.csv")
+    results_fmt
 }
 
 sim_res <- run_simulations(simulation_params, pheno_params, geno_params, 
@@ -768,26 +796,33 @@ sim_res %>%
 
 ```{r replication-exports}
 fetch_top_rsid <- function(gene) {
-  f <- list.files(path = "../data/processed/gene_followup/", 
-                  pattern = paste0(".*", tolower(gene), "_top_rsid.txt"),
-                  full.names = TRUE)
-  scan(f, what = character(), quiet = TRUE)
+  top_snp_fn <- list.files(path = "../data/processed/gene_followup/", 
+                           pattern = paste0(".*", tolower(gene), "_top_snp.txt"),
+                           full.names = TRUE)
+  top_snp <- scan(top_snp_fn, what = character(), quiet = TRUE)
+  top_snp_pos <- as.numeric(str_match(top_snp, ":([0-9]*):")[2])
+  gwis_subset_fn <- list.files(path = "../data/processed/gene_followup/", 
+                               pattern = paste0(".*", tolower(gene), "_subset"),
+                               full.names = TRUE)
+  gwis_subset_df <- read_tsv(gwis_subset_fn)
+  top_rsid <- gwis_subset_df$RSID[gwis_subset_df$POS == top_snp_pos]
+  if (length(top_rsid) == 1) top_rsid else gsub(":[A-Z]*:[A-Z]*", "", top_snp)
 }
 
-fetch_top_rsid2 <- function(gene) {
-  f2 <- list.files(path = "../data/processed/gene_followup/", 
-                   pattern = paste0(".*", tolower(gene), "_top_rsid2.txt"),
-                  full.names = TRUE)
-  tryCatch(scan(f2, what = character(), quiet = TRUE), error = function(e) "")
-}
+# fetch_top_rsid2 <- function(gene) {
+#   f2 <- list.files(path = "../data/processed/gene_followup/", 
+#                    pattern = paste0(".*", tolower(gene), "_top_rsid2.txt"),
+#                   full.names = TRUE)
+#   tryCatch(scan(f2, what = character(), quiet = TRUE), error = function(e) "")
+# }
 
 replication_export_tbl <- gene_summary_df %>%
   filter(fdr_sig) %>%
   rowwise() %>%
-  mutate(primary_rsid = fetch_top_rsid(SYMBOL),
-         secondary_rsid = fetch_top_rsid2(SYMBOL)) %>%
+  mutate(primary_rsid = fetch_top_rsid(SYMBOL)) %>%
+         # secondary_rsid = fetch_top_rsid2(SYMBOL)) %>%
   ungroup() %>%
-  select(pathway, SYMBOL, CHR, primary_rsid, secondary_rsid) %>%
+  select(pathway, SYMBOL, CHR, primary_rsid) %>%  #, secondary_rsid) %>%
   pivot_longer(contains("_rsid"), 
                names_to = "rsid_type", names_pattern = "(.*)_rsid",
                values_to = "rsid")
@@ -833,9 +868,62 @@ downstream_rep_df <- replication_export_tbl %>%
   filter(e == "N3") %>%
   arrange(p_wghs)
 make_qq(filter(downstream_rep_df, e == "N3"), "p_wghs")
+
+up_down_rep_df <- bind_rows(list(
+  upstream = upstream_rep_df,
+  downstream = downstream_rep_df
+), .id = "pathway")
+```
+
+# Export datasets for manuscript
+
+```{r export-manuscript}
+saveRDS(gene_summary_df, "../data/processed/manuscript/gene_summary_df.rds")
+saveRDS(gc_summary_df, "../data/processed/manuscript/gc_summary_df.rds")
+
+saveRDS(sim_res, "../data/processed/manuscript/power_sim_res_df.rds")
+saveRDS(up_down_rep_df, "../data/processed/manuscript/up_down_rep_df.rds")
 ```
 
 # Archive
+
+```{r old-gene-followup-viz-functions, eval=F}
+make_gene_snp_plot <- function(ss_df, p_col = "robust_P_Value_Interaction") {
+  ss_df %>%
+    mutate(nlp_int = -log10(!!sym(p_col))) %>%
+    ggplot(aes(x = POS, y = nlp_int)) +
+    geom_point() +
+    geom_text(aes(label = SNPID)) +
+    labs(y=expression(-log[10](p[int])))
+}
+
+make_int_effect_chr_plot <- function(all_maf_ss_df, e, top_snpid) {
+  beta_vec <- all_maf_ss_df[[paste0("Beta_G-", e)]]
+  ylims <- median(beta_vec, na.rm = TRUE) + c(-5, 5) * mad(beta_vec, na.rm = TRUE)
+  all_maf_ss_df %>%
+    mutate(int_estimate = !!sym(paste0("Beta_G-", e)),
+           int_se = !!sym(paste0("SE_Beta_G-", e))) %>%
+    arrange(int_estimate) %>%
+    mutate(l95 = int_estimate - 1.96 * int_se,
+           u95 = int_estimate + 1.96 * int_se,
+           top_gwis = (SNPID == gsub("_.*", "", top_snpid)),
+           SNPID = factor(SNPID, levels = SNPID)) %>%
+    ggplot(aes(x = POS, y = int_estimate)) +
+    geom_point(aes(color = top_gwis)) +
+    geom_errorbar(aes(ymin=l95, ymax=u95, color = top_gwis), width = 0.2) +
+    geom_hline(yintercept = 0, color = "gray") +
+    # geom_text(aes(label = SNPID)) +
+    scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
+                       breaks = c(TRUE),
+                       labels = c("Top variant from GWIS")) +
+    labs(x = "SNPID", y = "Interaction effect estimate (95% CI)") +
+    # coord_cartesian(ylim = ylims) +
+    theme(axis.text.x = element_blank(),
+          # axis.text.x = element_text(angle = 45, hjust = 0.9),
+          legend.position = "bottom", legend.title = element_blank(), 
+          legend.key = element_blank())
+}
+```
 
 ## AHA EPI Lifestyle abstract
 
