@@ -17,21 +17,24 @@ gwis_dir=../data/processed/gwis
 ldref_dir=../data/processed/ld_ref
 ldsc_datadir=../data/processed/ldsc
 
-
 e1=$1
-e2=$2
-pheno=$3
+pheno1=$2
+e2=$3
+pheno2=$4
 
 
-working_dir=${e1}_${e2}_${pheno}_ldsc_dir
+tag1=${e1}_${pheno1}
+tag2=${e2}_${pheno2}
+
+working_dir=${tag1}_${tag2}_ldsc_dir
 
 
 # Munge summary statistics to prep for LDSC
 mkdir -p ${working_dir}
-for e in ${e1} ${e2}; do 
-cut  -f 2- ${gwis_dir}/${e}_${pheno}_merged > ${working_dir}/${e}_${pheno}_ss
+
+cut  -f 2- ${gwis_dir}/${tag1}_merged > ${working_dir}/${tag1}_ss
 ../opt/ldsc/munge_sumstats.py \
-        --sumstats ${working_dir}/${e}_${pheno}_ss \
+        --sumstats ${working_dir}/${tag1}_ss \
         --merge-alleles ../data/raw/ldsc/w_hm3.snplist \
         --snp RSID \
         --N-col N_Samples \
@@ -39,19 +42,33 @@ cut  -f 2- ${gwis_dir}/${e}_${pheno}_merged > ${working_dir}/${e}_${pheno}_ss
         --a2 Non_Effect_Allele \
         --p robust_P_Value_Interaction \
         --frq AF \
-        --signed-sumstats Beta_G-${e},0 \
+        --signed-sumstats Beta_G-${e1},0 \
         --chunksize 500000 \
-        --out ${working_dir}/${e}_${pheno}
-rm ${working_dir}/${e}_${pheno}_ss
-done
+        --out ${working_dir}/${tag1}
+rm ${working_dir}/${tag1}_ss
+
+cut  -f 2- ${gwis_dir}/${tag2}_merged > ${working_dir}/${tag2}_ss
+../opt/ldsc/munge_sumstats.py \
+        --sumstats ${working_dir}/${tag2}_ss \
+        --merge-alleles ../data/raw/ldsc/w_hm3.snplist \
+        --snp RSID \
+        --N-col N_Samples \
+        --a1 Effect_Allele \
+        --a2 Non_Effect_Allele \
+        --p robust_P_Value_Interaction \
+        --frq AF \
+        --signed-sumstats Beta_G-${e2},0 \
+        --chunksize 500000 \
+        --out ${working_dir}/${tag2}
+rm ${working_dir}/${tag2}_ss
 
 
 # Run LDSC to calculate genetic correlations
 ../opt/ldsc/ldsc.py \
-	--rg ${working_dir}/${e1}_${pheno}.sumstats.gz,${working_dir}/${e2}_${pheno}.sumstats.gz \
+	--rg ${working_dir}/${tag1}.sumstats.gz,${working_dir}/${tag2}.sumstats.gz \
 	--ref-ld ${ldref_dir}/ukb_20k_hg19_withCM \
 	--w-ld ${ldref_dir}/ukb_20k_hg19_withCM \
-	--out ${ldsc_datadir}/${e1}_${e2}_${pheno}
+	--out ${ldsc_datadir}/${tag1}_${tag2}
 
 rm -r ${working_dir}
 

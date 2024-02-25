@@ -24,12 +24,18 @@ qsub -t 1-22 gwis/run_gwis.sh oily_fish Omega_3_pct
 qsub -t 1-22 gwis/run_gwis.sh Omega_3_pct hscrp_log
 qsub -t 1-22 gwis/run_gwis.sh fish_oil hscrp_log
 qsub -t 1-22 gwis/run_gwis.sh fish_oil Omega_3_pct
+qsub -t 1-22 gwis/run_gwis.sh Omega_3_pct tg_log
+qsub -t 1-22 gwis/run_gwis.sh Omega_3_pct ldl_statinadj
+qsub -t 1-22 gwis/run_gwis.sh n3fa_ffq Omega_3_pct
 
 gwis/postprocess_gwis.sh ../data/processed/gwis/oily_fish_hscrp_log
 gwis/postprocess_gwis.sh ../data/processed/gwis/oily_fish_Omega_3_pct
 gwis/postprocess_gwis.sh ../data/processed/gwis/Omega_3_pct_hscrp_log
 gwis/postprocess_gwis.sh ../data/processed/gwis/fish_oil_hscrp_log
 gwis/postprocess_gwis.sh ../data/processed/gwis/fish_oil_Omega_3_pct
+gwis/postprocess_gwis.sh ../data/processed/gwis/Omega_3_pct_tg_log
+gwis/postprocess_gwis.sh ../data/processed/gwis/Omega_3_pct_ldl_statinadj
+gwis/postprocess_gwis.sh ../data/processed/gwis/n3fa_ffq_Omega_3_pct
 
 rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/gwis/*_merged_*" ../data/processed/gwis/
 rsync -ravP uger:"florez_ukb_projects/ukb-n3/data/processed/gwis/qq_plots" ../data/processed/gwis/
@@ -43,13 +49,21 @@ qsub post_gwis/run_magma.sh ../data/processed/gwis/oily_fish_Omega_3_pct_magmaIn
 qsub post_gwis/run_magma.sh ../data/processed/gwis/Omega_3_pct_hscrp_log_magmaInput.tsv Omega_3_pct_hscrp_log
 qsub post_gwis/run_magma.sh ../data/processed/gwis/fish_oil_hscrp_log_magmaInput.tsv fish_oil_hscrp_log
 qsub post_gwis/run_magma.sh ../data/processed/gwis/fish_oil_Omega_3_pct_magmaInput.tsv fish_oil_Omega_3_pct
+qsub post_gwis/run_magma.sh ../data/processed/gwis/Omega_3_pct_tg_log_magmaInput.tsv Omega_3_pct_tg_log
+qsub post_gwis/run_magma.sh ../data/processed/gwis/Omega_3_pct_ldl_statinadj_magmaInput.tsv Omega_3_pct_ldl_statinadj
+qsub post_gwis/run_magma.sh ../data/processed/gwis/n3fa_ffq_Omega_3_pct_magmaInput.tsv n3fa_ffq_Omega_3_pct
 
 rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/magma/*.genes.out" ../data/processed/magma/
 
 # LDSC for whole-genome GxE estimates and genetic correlation
 qsub post_gwis/prep_ldsc.sh
 
-for pheno in Omega_3_pct hscrp_log; do qsub post_gwis/run_ldsc.sh oily_fish fish_oil ${pheno}; done
+for pheno in Omega_3_pct hscrp_log; do 
+	qsub post_gwis/run_ldsc.sh oily_fish_${pheno} fish_oil_${pheno}
+done
+qsub post_gwis/run_ldsc.sh Omega_3_pct tg_log Omega_3_pct tg_log
+qsub post_gwis/run_ldsc.sh Omega_3_pct ldl_statinadj Omega_3_pct ldl_statinadj
+qsub post_gwis/run_ldsc.sh oily_fish Omega_3_pct n3fa_ffq Omega_3_pct
 
 rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ldsc/*.log" ../data/processed/ldsc/
 
@@ -68,13 +82,8 @@ qsub post_gwis/gene_follow_up.sh 19 chr19:48109453-48207534 gltscr1 oily_fish Om
 qsub post_gwis/gene_follow_up.sh 6 chr6:117608530-117749018 ros1 oily_fish Omega_3_pct
 qsub post_gwis/gene_follow_up.sh 7 chr7:107299080-107359254 slc26a4 Omega_3_pct hscrp_log
 
-#qsub post_gwis/gene_follow_up.sh 5 05:123395487-123774213 parp8 oily_fish Omega_3_pct
-#qsub post_gwis/gene_follow_up.sh 11 11:61566097-61586529 fads1 oily_fish Omega_3_pct
-#qsub post_gwis/gene_follow_up.sh 11 11:61581675-61635826 fads2 oily_fish Omega_3_pct
-#qsub post_gwis/gene_follow_up.sh 11 11:61555602-61562085 tmem258 oily_fish Omega_3_pct
-#qsub post_gwis/gene_follow_up.sh 15 15:38542925-38650450 spred1 Omega_3_pct hscrp_log
-#qsub post_gwis/gene_follow_up.sh 6 06:31365561-31384090 mica Omega_3_pct hscrp_log
-#qsub post_gwis/gene_follow_up.sh 2 02:99059321-99208496 inpp4a fish_oil Omega_3_pct
-#qsub post_gwis/gene_follow_up.sh 4 04:88894802-88905563 spp1 fish_oil Omega_3_pct
-
-rsync -ravP uger:florez_ukb_projects/ukb-n3/data/processed/gene_followup ../data/processed/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/gene_followup/*subset" ../data/processed/gene_followup/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/gene_followup/*regressions" ../data/processed/gene_followup/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/gene_followup/*regressions_cond" ../data/processed/gene_followup/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/gene_followup/*top_snp*" ../data/processed/gene_followup/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/gene_followup/*top_cond_snp*" ../data/processed/gene_followup/

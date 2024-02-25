@@ -1,8 +1,8 @@
 #!/bin/bash
 
 
-#$ -l h_vmem=20G
-#$ -l h_rt=1:00:00
+#$ -l h_vmem=30G
+#$ -l h_rt=2:00:00
 
 #$ -cwd
 #$ -j y
@@ -25,6 +25,8 @@ use R-4.1
 use GCC-5.2
 use Anaconda3
 
+plink2=../opt/plink2.0/plink2
+
 
 # Lift gene position bounds to GRCh38
 echo ${range} | sed 's/[:-]/\t/g' > ${geno_dir}/${gene_symbol}_bounds_hg19.bed
@@ -39,15 +41,6 @@ range_hg38=$(awk '{print $1":"$2"-"$3}' ${geno_dir}/${gene_symbol}_bounds_hg38.b
 
 
 # Use bgenix to subset (by position) to variants in the gene
-##qctool="../opt/qctool_v2.0.6-CentOS\ Linux7.3.1611-x86_64/qctool"
-##eval "${qctool}" \
-##	-g /humgen/florezlab/users/pschroeder/UKBB/TOPMedImputation/imputed_data/UKBB_UKBL_chr${chr}/region_merge_union/chr${chr}.dose.vcf.bgen \
-##	-s /humgen/florezlab/users/pschroeder/UKBB/TOPMedImputation/GWAS_UKBB_UKBL/final.bgen.sample \
-##	-incl-range "${range_hg38}" \
-##	-og ${geno_dir}/${gene_symbol}_genotypes.bgen \
-##	-os ${geno_dir}/${gene_symbol}_genotypes.sample
-##	#-g /broad/ukbb/imputed_v3/ukb_imp_chr${chr}_v3.bgen \
-##	#-s /humgen/florezlab/UKBB_app27892/ukb27892_imp_chrAUT_v3_s487395.sample \
 source activate bgen
 bgenix \
 	-g /humgen/florezlab/users/pschroeder/UKBB/TOPMedImputation/imputed_data/UKBB_UKBL_chr${chr}/region_merge_union/chr${chr}.dose.vcf.bgen \
@@ -58,7 +51,6 @@ conda deactivate
 
 
 # Convert genotype file to PLINK2 format, lift back to hg19, and export to tabular format
-plink2=../opt/plink2.0/plink2
 ${plink2} \
 	--bgen ${geno_dir}/${gene_symbol}_genotypes.bgen ref-first \
 	--sample ${geno_dir}/${gene_symbol}_genotypes.sample \
@@ -74,13 +66,9 @@ ${liftover} \
 paste <(tail -n +2 ${geno_dir}/${gene_symbol}_genotypes_hg38.pvar) ${geno_dir}/${gene_symbol}_genotypes_hg19.bed \
 	| awk 'BEGIN {OFS="\t"} {print "chr" $1, $7, "chr"$1":"$7":"$4":"$5, $4, $5}' \
 	> ${geno_dir}/${gene_symbol}_genotypes.pvar
-cat <(echo "#CHROM  POS	ID	REF	ALT") <(cat ${geno_dir}/${gene_symbol}_genotypes.pvar) > ${geno_dir}/${gene_symbol}_genotypes.pvar_tmp
+cat <(echo "#CHROM	POS	ID	REF	ALT") <(cat ${geno_dir}/${gene_symbol}_genotypes.pvar) > ${geno_dir}/${gene_symbol}_genotypes.pvar_tmp
 mv ${geno_dir}/${gene_symbol}_genotypes.pvar_tmp ${geno_dir}/${gene_symbol}_genotypes.pvar
 
-##${plink2} \
-##	--pfile ${geno_dir}/${gene_symbol}_genotypes \
-##	--export vcf bgz vcf-dosage=DS-force id-paste=iid \
-##	--out ${geno_dir}/${gene_symbol}_genotypes 
 ${plink2} \
 	--pfile ${geno_dir}/${gene_symbol}_genotypes \
 	--export A \
@@ -99,104 +87,78 @@ gene_ss <- read_tsv("../data/processed/gwis/${e}_${pheno}_chr${chr}") %>%
 gene_ss %>%
   write_tsv("${fu_dir}/${e}_${pheno}_${gene_symbol}_subset")
 
-missing_rsids <- scan("${fu_dir}/missing_rsids.txt", what = character())
+topmed_imp_pvar <- read_tsv("${geno_dir}/${gene_symbol}_genotypes.pvar")
 top_snp_row <- gene_ss %>%
-  filter(!(RSID %in% missing_rsids)) %>%
-  slice(which.min(robust_P_Value_Interaction))
+  arrange(robust_P_Value_Interaction) %>%
+  filter(POS %in% topmed_imp_pvar[["POS"]]) %>%  # Interested in top variant that is also present in TOPMed-imputed genotype dataset
+  slice(1)
 top_rsid_str <- top_snp_row[["RSID"]]
 if (!grepl("^rs", top_rsid_str)) top_rsid_str <- paste0("chr", top_rsid_str)
 write(top_rsid_str, "${fu_dir}/${e}_${pheno}_${gene_symbol}_top_rsid.txt")
-top_snpid_str <- paste(paste0("chr", str_remove(top_snp_row[["CHR"]], "^0+")), top_snp_row[["POS"]], top_snp_row[["Non_Effect_Allele"]], top_snp_row[["Effect_Allele"]], sep = ":")
-write(top_snpid_str, "${fu_dir}/${e}_${pheno}_${gene_symbol}_top_snpid.txt")
-write(top_snp_row[["Effect_Allele"]], "${fu_dir}/${e}_${pheno}_${gene_symbol}_top_snp_allele.txt")
+top_snp_str <- paste(paste0("chr", str_remove(top_snp_row[["CHR"]], "^0+")), top_snp_row[["POS"]], top_snp_row[["Non_Effect_Allele"]], top_snp_row[["Effect_Allele"]], sep = ":")
+write(top_snp_str, "${fu_dir}/${e}_${pheno}_${gene_symbol}_top_snp.txt")
+tibble(top_snp_str, top_snp_row[["Effect_Allele"]]) %>%
+  write_tsv("${fu_dir}/${e}_${pheno}_${gene_symbol}_top_snp_allele.txt", col_names = FALSE)
+
+nominal_snps <- gene_ss %>%
+  filter(robust_P_Value_Interaction < 0.05) %>%
+  mutate(snpid = paste(paste0("chr", str_remove(CHR, "^0+")), POS, Non_Effect_Allele, Effect_Allele, sep = ":"))
+write(nominal_snps[["snpid"]], "${fu_dir}/${e}_${pheno}_${gene_symbol}_nominal_snps.txt")
 EOF
 
 
-# Extract and export the top SNP
+# Extract and export the top SNP and nominal SNP set
 
 ${plink2} \
 	--pfile ${geno_dir}/${gene_symbol}_genotypes \
-	--extract ${fu_dir}/${e}_${pheno}_${gene_symbol}_top_snpid.txt \
+	--extract ${fu_dir}/${e}_${pheno}_${gene_symbol}_top_snp.txt \
 	--export A \
 	--export-allele ${fu_dir}/${e}_${pheno}_${gene_symbol}_top_snp_allele.txt \
 	--out ${fu_dir}/${e}_${pheno}_${gene_symbol}_top_snp
 
+${plink2} \
+	--pfile ${geno_dir}/${gene_symbol}_genotypes \
+	--extract ${fu_dir}/${e}_${pheno}_${gene_symbol}_nominal_snps.txt \
+	--export A \
+	--out ${fu_dir}/${e}_${pheno}_${gene_symbol}_nominal_snps
 
-# Test GxE at all variants in the region (no MAF filter)
 
-gPC_arr=(gPC1 gPC2 gPC3 gPC4 gPC5 gPC6 gPC7 gPC8 gPC9 gPC10)
-gPC_int_arr=( "${gPC_arr[@]/#/${e}By}" )
-covars=$(cat ../data/processed/gwis_covariates.txt | tr '\n' ' ')
-covars="${covars} ${gPC_int_arr[@]}"
+# GxE for all gene variants (low MAF filter), including conditional on nominal GWIS variants
 
-R --no-save <<EOF
-library(tidyverse)
-phenos <- read_csv("../data/processed/ukb_gwis_phenos.csv") %>%
-  mutate(across(contains("gPC"), ~ . * ${e}, .names="${e}By{.col}"))
-top_snp_df <- read_tsv("${fu_dir}/${e}_${pheno}_${gene_symbol}_top_snp.raw") %>% 
-  select(id = IID, last_col()) %>%
-  setNames(c("id", "top_snp"))
-phenos %>%
-  inner_join(top_snp_df, by = "id") %>%
-  mutate(top_snp_gxe = top_snp * ${e}) %>%
-  write_csv("../data/processed/${e}_${pheno}_phenos_${gene_symbol}.tmp")
-EOF
+post_gwis/conditional_gxe.sh \
+	${geno_dir}/${gene_symbol}_genotypes \
+	"" \
+	${e} \
+	${pheno} \
+	${fu_dir}/${e}_${pheno}_${gene_symbol}_regressions
 
-singularity_dir=~/kw/singularity
-singularity exec \
-	-B ../data/processed:/data \
-	-B /broad/ukbb/imputed_v3:/bgendir \
-	-B /humgen/florezlab/UKBB_app27892:/sampledir \
-	${singularity_dir}/gem-v1.5.2-workflow.simg \
-	/bin/bash <<EOF
-
-# Unconditional
-/GEM/GEM \
-	--bgen /data/genotypes/${gene_symbol}_genotypes.bgen \
-	--sample /data/genotypes/${gene_symbol}_genotypes.sample \
-	--pheno-file /data/${e}_${pheno}_phenos_${gene_symbol}.tmp \
-	--sampleid-name id \
-	--pheno-name ${pheno} \
-	--exposure-names ${e} \
-	--covar-names ${covars} \
-	--delim , \
-	--missing-value NA \
-	--cat-threshold 3 \
-	--maf 0.0001 \
-	--robust 1 \
-	--output-style meta \
-	--out /data/gene_followup/${e}_${pheno}_${gene_symbol}_regressions
-
-# Conditional on top variant
-/GEM/GEM \
-	--bgen /data/genotypes/${gene_symbol}_genotypes.bgen \
-	--sample /data/genotypes/${gene_symbol}_genotypes.sample \
-	--pheno-file /data/${e}_${pheno}_phenos_${gene_symbol}.tmp \
-	--sampleid-name id \
-	--pheno-name ${pheno} \
-	--exposure-names ${e} \
-	--covar-names ${covars} top_snp top_snp_gxe \
-	--delim , \
-	--missing-value NA \
-	--cat-threshold 3 \
-	--maf 0.0001 \
-	--robust 1 \
-	--output-style meta \
-	--out /data/gene_followup/${e}_${pheno}_${gene_symbol}_regressions_cond
-
-EOF
-
-rm ../data/processed/${e}_${pheno}_phenos_${gene_symbol}.tmp
+post_gwis/conditional_gxe.sh \
+	${geno_dir}/${gene_symbol}_genotypes \
+	${fu_dir}/${e}_${pheno}_${gene_symbol}_nominal_snps.raw \
+	${e} \
+	${pheno} \
+	${fu_dir}/${e}_${pheno}_${gene_symbol}_regressions_cond
 
 
 # Save top conditional variant
 
 R --no-save <<EOF
 library(tidyverse)
-
 gene_ss_cond <- read_tsv("${fu_dir}/${e}_${pheno}_${gene_symbol}_regressions_cond") %>%
-  filter(AF >= 0.01, AF <= 0.99)
+  filter(AF < 0.01 | AF > 0.99)
 top_snp_row <- gene_ss_cond[which.min(gene_ss_cond[["robust_P_Value_Interaction"]]), ]
-top_snpid_str <- paste(paste0("chr", top_snp_row[["CHR"]]), top_snp_row[["POS"]], top_snp_row[["Non_Effect_Allele"]], top_snp_row[["Effect_Allele"]], sep = ":")
-write(top_snpid_str, "${fu_dir}/${e}_${pheno}_${gene_symbol}_top_snpid2.txt")
+top_snp_str <- paste(paste0(top_snp_row[["CHR"]]), top_snp_row[["POS"]], top_snp_row[["Non_Effect_Allele"]], top_snp_row[["Effect_Allele"]], sep = ":")
+write(top_snp_str, "${fu_dir}/${e}_${pheno}_${gene_symbol}_top_cond_snp.txt")
+write(top_snp_row[["Effect_Allele"]], "${fu_dir}/${e}_${pheno}_${gene_symbol}_top_cond_snp_allele.txt")
 EOF
+
+
+# Extract and export the top conditional SNP
+
+${plink2} \
+	--pfile ${geno_dir}/${gene_symbol}_genotypes \
+	--extract ${fu_dir}/${e}_${pheno}_${gene_symbol}_top_cond_snp.txt \
+	--export A \
+	--export-allele ${fu_dir}/${e}_${pheno}_${gene_symbol}_top_cond_snp_allele.txt \
+	--out ${fu_dir}/${e}_${pheno}_${gene_symbol}_top_cond_snp
+
