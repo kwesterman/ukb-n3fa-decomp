@@ -10,4 +10,4 @@
 source /broad/software/scripts/useuse
 use R-4.1
 
-Rscript data_prep/prep_ukb_phenos_longitudinal.R
+Rscript data_prep/prep_ukb_phenos.R

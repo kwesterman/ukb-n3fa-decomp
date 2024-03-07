@@ -4,11 +4,11 @@ qsub data_prep/prep_nmr.sh
 rsync -avP uger:florez_ukb_projects/ukb-n3/data/processed/nmr/nmr_data.csv ../data/processed/nmr/
 
 # Phenotyping
-qsub data_prep/prep_ukb_phenos_longitudinal.sh
+qsub data_prep/prep_ukb_phenos.sh
 
-rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ukb_phenos_longitudinal_raw.csv" ../data/processed/
-rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ukb_phenos_longitudinal_unrelated.csv" ../data/processed/
-rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ukb_phenos_longitudinal_panUKBB.csv" ../data/processed/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ukb_phenos_raw.csv" ../data/processed/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ukb_phenos_unrelated.csv" ../data/processed/
+rsync -avP uger:"florez_ukb_projects/ukb-n3/data/processed/ukb_phenos_panUKBB.csv" ../data/processed/
 rsync -avP uger:florez_ukb_projects/ukb-n3/data/processed/all_24hr_data.csv ../data/processed/
 
 # Run pheno_summary.Rmd

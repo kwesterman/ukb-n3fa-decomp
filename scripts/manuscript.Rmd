@@ -955,38 +955,3 @@ cond_g_strat_plt <- make_g_strat_plot(top_cond_snp, e_regression, y, regression_
                                       "Stratified interaction plot for top conditional rare SNP")
 print(cond_double_strat_plt + cond_g_strat_plt)
 ```
-
-# Ancestry breakdown
-
-```{r ancestry-heterogeneity}
-ancestry_df <- read_csv("../data/processed/ukb_phenos_longitudinal_panUKBB.csv", 
-                        col_select = c("id", "ancestry")) %>%
-  distinct() %>% 
-  mutate(id = as.character(id))
-
-ancestry_plot_data <- readRDS("../data/processed/manuscript/ancestry_plot_data.rds")
-
-ancestry_plot_data %>%
-  ggplot(aes(x = oily_fish, y = pred, color = ancestry)) +
-  geom_line() +
-  labs(x = "Oily fish", y = "Predicted log(hsCRP)",
-       title = "Ancestry heterogeneity in oily fish-hsCRP relationship")
-
-top_snp_df <- read_tsv(paste0("../data/processed/gene_followup/oily_fish_Omega_3_pct_fads1_top_snp.raw")) %>%
-  select(id = IID, last_col()) %>%
-  mutate(id = as.character(id))
-top_snp <- names(top_snp_df)[2]
-gene_fu_df <- phenos %>%
-  inner_join(top_snp_df, by = "id") %>%
-  mutate(G = !! sym(top_snp)) %>%
-  inner_join(ancestry_df, by = "id")
-gene_fu_df %>%
-  group_by(ancestry) %>%
-  summarise(MAF = sum(G) / (2 * n()),
-            N = n()) %>%
-  mutate(MAF = round(MAF, 2)) %>%
-  arrange(MAF) %>%
-  kable(caption = "Ancestry differences in MAF at top FADS1 SNP") %>%
-  kable_styling(full_width = FALSE)
-```
-

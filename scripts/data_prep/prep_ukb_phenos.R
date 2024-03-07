@@ -2,7 +2,13 @@ library(tidyverse)
 library(data.table)
 
 
-### Longitudinal data retrieval ------------------------------------------------
+### Wrangling helpers ----------------------------------------------------------
+
+fetch_fields <- function(df, named_field_ids) {
+  named_fields <- setNames(paste0("f.", named_field_ids, ".0.0"),
+                           names(named_field_ids))
+  select(df, id = f.eid, all_of(named_fields))
+}
 
 wrangle_long_data <- function(
     df, 
@@ -41,25 +47,20 @@ centers <- c(
   "11006" = "Stoke", "11022" = "Swansea", "11023" = "Wrexham",
   "11025" = "Cheadle_pilot", "11027" = "Newcastle_pilot"
 )
-ac_long_df <- base_pheno_df %>%
-  select(f.eid, contains("f.54."), contains("f.53.")) %>%
-  mutate(across(everything(), as.character)) %>%
-  wrangle_long_data(ac_fields, merge_array_func = function(x) x[1]) %>%
+ac_df <- base_pheno_df %>%
+  fetch_fields(ac_fields) %>%
   mutate(id = as.integer(id),
-         ac = centers[ac])  # Recode numbers to location names
+         ac = centers[as.character(ac)])  # Recode numbers to location names
 
 basic_fields <- c(sex = 31, age = 21003,  bmi = 21001, 
                   sbp = 4080, dbp = 4079, fasting_hrs = 74)
-basic_phenos_long_df <- base_pheno_df %>%
-  wrangle_long_data(basic_fields) %>%
-  group_by(id) %>%
-  mutate(sex = ifelse(is.na(sex), sex[instance == 0], sex)) %>%
-  ungroup() %>%
+basic_phenos_df <- base_pheno_df %>%
+  fetch_fields(basic_fields) %>%
   mutate(age_squared = age^2,
          ageBySex = age * sex)
 
-saveRDS(ac_long_df, "ac_long_df.rds")
-saveRDS(basic_phenos_long_df, "basic_phenos_long_df.rds")
+saveRDS(ac_df, "ac_df.rds")
+saveRDS(basic_phenos_df, "basic_phenos_df.rds")
 
 ### Covariates and confounders -------------------------------------------------
 
@@ -73,9 +74,9 @@ income_coding <- c(
   "-1" = "Do not know",
   "-3" = "Prefer not to answer"
 )
-income_long_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_download_may_2023/ukb672750.tab.gz",
+income_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_download_may_2023/ukb672750.tab.gz",
                         data.table = FALSE, stringsAsFactors = FALSE) %>%
-  wrangle_long_data(income_fields) %>%
+  fetch_fields(income_fields) %>%
   mutate(income = income_coding[as.character(income)])
 
 education_fields <- c(education = 6138)
@@ -89,9 +90,9 @@ education_coding <- c(
   "-7" = "None of the above",
   "-3" = "Prefer not to answer"
 )
-education_long_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_download_aug_2022/ukb669148.tab.gz",
+education_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_download_aug_2022/ukb669148.tab.gz",
                            data.table = FALSE, stringsAsFactors = FALSE) %>%
-  wrangle_long_data(education_fields) %>%
+  fetch_fields(education_fields) %>%
   mutate(education = education_coding[as.character(education)])
 
 lifestyle_fields <- c(smoking = 20116)
@@ -101,8 +102,8 @@ smoking_coding <- c(
   "1" =	"Previous",
   "2" =	"Current"
 )
-lifestyle_long_df <- base_pheno_df %>%
-  wrangle_long_data(lifestyle_fields) %>%
+lifestyle_df <- base_pheno_df %>%
+  fetch_fields(lifestyle_fields) %>%
   mutate(smoking = smoking_coding[as.character(smoking)])
 
 alcohol_fields <- c(alcohol = 1558)
@@ -115,17 +116,17 @@ alcohol_coding <- c(
   "6" = "Never",
   "-3" = "Prefer not to answer"
 )
-alcohol_long_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_download_BEFORE_aug_2022/ukb40167.tab.gz",
+alcohol_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_download_BEFORE_aug_2022/ukb40167.tab.gz",
                          data.table = FALSE, stringsAsFactors = FALSE) %>%
-  wrangle_long_data(alcohol_fields) %>%
+  fetch_fields(alcohol_fields) %>%
   mutate(alcohol = alcohol_coding[as.character(alcohol)])
 
-covariate_long_df <- income_long_df %>%
-  full_join(education_long_df, by=c("id", "instance")) %>%
-  full_join(lifestyle_long_df, by=c("id", "instance")) %>%
-  full_join(alcohol_long_df, by=c("id", "instance"))
+covariate_df <- income_df %>%
+  full_join(education_df, by = "id") %>%
+  full_join(lifestyle_df, by = "id") %>%
+  full_join(alcohol_df, by = "id")
 
-saveRDS(covariate_long_df, "covariate_long_df.rds")
+saveRDS(covariate_df, "covariate_df.rds")
 
 ### Biomarkers -----------------------------------------------------------------
 
@@ -136,12 +137,12 @@ bm_fields <- c(
 
 biomarker_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_download_BEFORE_aug_2022/ukb28679.tab.gz", 
                       data.table = FALSE, stringsAsFactors = FALSE)
-biomarker_long_df <- biomarker_df %>%
-  wrangle_long_data(bm_fields)
+biomarker_df <- biomarker_df %>%
+  fetch_fields(bm_fields)
 
 # Collect medication data for biomarker adjustments
 drug_df <- base_pheno_df %>%
-  select(id=f.eid, contains("f.20003.0"), contains("f.6177.0"))
+  select(id = f.eid, contains("f.20003.0"), contains("f.6177.0"))
 
 statin_ids <- c(
   1140861958, 1140888594, 1140888648, 1141146234, 1141192410, 1140861922, 1141146138
@@ -156,9 +157,9 @@ drug_df$bp_med <- rowSums(drug_df[, (
 drug_df <- select(drug_df, id, num_statins, bp_med)
 
 # Make medication-based biomarker adjustments
-biomarker_long_df <- left_join(biomarker_long_df, 
+biomarker_df <- left_join(biomarker_df, 
                                select(drug_df, id, num_statins),
-                               by="id")  # Not currently joining by instance!
+                               by = "id")  # Not currently joining by instance!
 statin_adj_bms <- c("chol", "ldl", "apoB")
 statin_adj_factors <- c(
   chol = 0.749,
@@ -166,27 +167,27 @@ statin_adj_factors <- c(
   apoB = 0.719
 )
 for (bm in statin_adj_bms) {
-  adj_factor <- ifelse(biomarker_long_df$num_statins > 0, statin_adj_factors[bm], 1)
-  biomarker_long_df[[paste0(bm, "_statinadj")]] <- biomarker_long_df[[bm]] / adj_factor
+  adj_factor <- ifelse(biomarker_df$num_statins > 0, statin_adj_factors[bm], 1)
+  biomarker_df[[paste0(bm, "_statinadj")]] <- biomarker_df[[bm]] / adj_factor
 }
 
-basic_phenos_long_df <- left_join(basic_phenos_long_df, 
+basic_phenos_df <- left_join(basic_phenos_df, 
                                   select(drug_df, id, bp_med), 
-                                  by="id")
+                                  by = "id")
 bp_adj_factors <- c(sbp = 15, dbp = 10)
 for (bm in c("sbp", "dbp")) {
-  adj_factor <- ifelse(basic_phenos_long_df$bp_med, bp_adj_factors[bm], 0)
-  basic_phenos_long_df[[paste0(bm, "_medsadj")]] <- basic_phenos_long_df[[bm]] + adj_factor
+  adj_factor <- ifelse(basic_phenos_df$bp_med, bp_adj_factors[bm], 0)
+  basic_phenos_df[[paste0(bm, "_medsadj")]] <- basic_phenos_df[[bm]] + adj_factor
 }
 
-saveRDS(biomarker_long_df, "biomarker_long_df.rds")
-saveRDS(basic_phenos_long_df, "basic_phenos_long_df.rds")
+saveRDS(biomarker_df, "biomarker_df.rds")
+saveRDS(basic_phenos_df, "basic_phenos_df.rds")
 
 ### Outcomes for sample exclusion ----------------------------------------------
 
 medical_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_download_BEFORE_aug_2022/ukb38040.tab.gz",
                     data.table = FALSE, stringsAsFactors = FALSE) %>%
-  select(id=f.eid, everything())
+  select(id = f.eid, everything())
 medical_df$diabetes <- rowSums(medical_df[, grepl("f\\.2443\\.0\\.", names(medical_df)), drop=FALSE] == 1, na.rm=T) > 0
 medical_df$MI <- rowSums(medical_df[, grepl("f\\.6150\\.0\\.", names(medical_df)), drop=FALSE] == 1, na.rm=T) > 0
 medical_df$angina <- rowSums(medical_df[, grepl("f\\.6150\\.0\\.", names(medical_df)), drop=FALSE] == 2, na.rm=T) > 0
@@ -202,7 +203,7 @@ for (f in grep("f\\.41204\\.0\\.", names(medical_df), value=T)) {
 medical_df$pregnant <- rowSums(medical_df[, grepl("f\\.3140\\.0\\.", names(medical_df)), drop=FALSE] == 1, na.rm=T) > 0
 cancer_tmp <- select(medical_df, 1, contains("f.40005."))
 cancer <- cancer_tmp[, 1:7] %>%
-  inner_join(select(filter(ac_long_df, instance == 0), id, ac_date), by="id")  # Add assessment center dates
+  inner_join(select(ac_df, id, ac_date), by = "id")  # Add assessment center dates
 cancer$ac_date = as.Date(cancer$ac_date)
 for (i in 2:7) {
   x <- ifelse(abs(difftime(cancer[, i, drop=TRUE], cancer$ac_date, units="days")) <= 365, TRUE, FALSE)  # TRUE if cancer diagnosis within a year of assessment center visit
@@ -214,7 +215,7 @@ cancer$cancer_within_1yearac = apply(cancer[, 9:14], 1, function(x) {
 cancer[names(cancer) == "x"] <- NULL
 
 medical_df <- medical_df %>%
-  left_join(select(cancer, id, cancer_within_1yearac), by="id") %>%
+  left_join(select(cancer, id, cancer_within_1yearac), by = "id") %>%
   mutate(CHD = MI | angina,
          cirrhosis = id %in% c(cirrhosis_primary_ids, cirrhosis_secondary_ids)) %>%
   select(id, diabetes, CHD, cirrhosis, pregnant, cancer_within_1yearac)
@@ -298,29 +299,30 @@ diet_24hr_primary_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_dow
                       data.table = FALSE, stringsAsFactors = FALSE)
 diet_24hr_nutrients_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_download_aug_2022/ukb670995.tab.gz", 
                                 data.table = FALSE, stringsAsFactors = FALSE)
-diet_24hr_df <- full_join(diet_24hr_primary_df, diet_24hr_nutrients_df, 
-                          by=c("f.eid"))
+diet_24hr_raw_df <- full_join(diet_24hr_primary_df, diet_24hr_nutrients_df, 
+                          by = c("f.eid"))
 rm(diet_24hr_primary_df, diet_24hr_nutrients_df)
 
 # Do the 24HR wrangling group-by-group to keep memory usage under control
 diet_24hr_qc_fields <- setNames(c("100020", "26002"), 
                                 c("typical_diet_qc", "TCALS_qc"))
-diet_24hr_qc_df <- diet_24hr_df %>%  # Get fields for "typical diet" and total calories to be used for QC
-  wrangle_long_data(diet_24hr_qc_fields)
+diet_24hr_qc_df <- diet_24hr_raw_df %>%  # Get fields for "typical diet" and total calories to be used for QC
+  wrangle_long_data(diet_24hr_qc_fields) #%>%
+  # select(id = f.eid, contains("100020"), contains("26002"))
 
-diet_24hr_long_list <- lapply(names(diet_fields_list), function(grp) {
+diet_24hr_list <- lapply(names(diet_fields_list), function(grp) {
   print(grp)
   grp_fields <- diet_fields_list[[grp]]
   is_food_group <- (grp %in% names(diet_food_group_fields_list))
-  diet_24hr_df %>%
+  diet_24hr_raw_df %>%
     filter(if_any(contains("f.26002."), ~ !is.na(.))) %>%
     wrangle_long_data(setNames(grp_fields, grp_fields)) %>%
-    inner_join(diet_24hr_qc_df, by=c("id", "instance")) %>%
+    inner_join(diet_24hr_qc_df, by = c("id", "instance")) %>%
     mutate(!!grp := calc_diet_fields(grp_fields, ., coding = is_food_group)) %>%
     select(id, instance, !!grp)
 })
-diet_24hr_long_df <- reduce(diet_24hr_long_list, function(x, y) {
-  full_join(x, y, by=c("id", "instance"))
+diet_24hr_df <- reduce(diet_24hr_list, function(x, y) {
+  full_join(x, y, by = c("id", "instance"))
 }) %>%
   mutate(PUFA = FAT - SFA - MUFA,
          TCALS = TCALS / 4.18) %>%  # Energy from kJ to kcals
@@ -331,25 +333,24 @@ diet_24hr_long_df <- reduce(diet_24hr_long_list, function(x, y) {
   mutate(MUFA2SFA = MUFA / SFA) %>%
   mutate(mds = calc_med_score(.))
 
-supp_24hr_long_df <- diet_24hr_df %>%  # Supplements reported on 24HR
+supp_24hr_df <- diet_24hr_raw_df %>%  # Supplements reported on 24HR
   wrangle_long_data(c(fish_oil_24hr = 20084),
                     function(x) ifelse(all(is.na(x)), NA, 
                                        as.integer(any(x == 472, na.rm = TRUE))))
 
-diet_supp_24hr_long_df <- diet_24hr_long_df %>%
-  left_join(supp_24hr_long_df, supp_24hr_long_df, by=c("id", "instance"))
+diet_supp_24hr_df <- diet_24hr_df %>%
+  left_join(supp_24hr_df, supp_24hr_df, by = c("id", "instance"))
 
-saveRDS(diet_supp_24hr_long_df, "diet_supp_24hr_long_df.rds")
+saveRDS(diet_supp_24hr_df, "diet_supp_24hr_df.rds")
 
-write_csv(diet_supp_24hr_long_df, "../data/processed/all_24hr_data.csv")
+write_csv(diet_supp_24hr_df, "../data/processed/all_24hr_data.csv")
 
-diet_supp_24hr_collapsed_df <- diet_supp_24hr_long_df %>%  # Collapse b/c these responses don't correspond to exam visits
+diet_supp_24hr_collapsed_df <- diet_supp_24hr_df %>%  # Collapse b/c these responses don't correspond to exam visits
   filter(!is.na(TCALS)) %>%  # Didn't complete the 24HR
   mutate(across(c(-id, -instance), ~ ifelse(is.na(.), 0, .))) %>%
   group_by(id) %>%
   summarise(across(-c(instance, typical_diet), ~ mean(., na.rm = TRUE)),
-            num_recalls = n()) %>%
-  mutate(instance = "0")
+            num_recalls = n())
 
 # Food frequency questionnaire
 
@@ -379,8 +380,8 @@ ffq_cat_fields <- c(oily_fish = 1329, nonoily_fish = 1339,
 ffq_cont_fields <- c(cooked_veg = 1289, raw_veg = 1299,
                      fresh_fruit = 1309, dried_fruit = 1319)
 ffq_fields <- c(ffq_cat_fields, ffq_cont_fields, bread_type = 1448)
-ffq_long_df <- base_pheno_df %>%
-  wrangle_long_data(ffq_fields) %>%
+ffq_df <- base_pheno_df %>%
+  fetch_fields(ffq_fields) %>%
   mutate(whole_bread = case_when(
     bread_type == 3 ~ 1,
     bread_type %in% c(1, 2, 4) ~ 0,
@@ -390,15 +391,15 @@ ffq_long_df <- base_pheno_df %>%
   mutate(across(names(ffq_cat_fields), ffq_cat_to_qt)) %>%
   mutate(across(names(ffq_cont_fields), ffq_clean_cont))
 
-saveRDS(ffq_long_df, "ffq_long_df.rds")
+saveRDS(ffq_df, "ffq_df.rds")
 
 # Supplements (from touchscreen or verbal interview)
 
 extra_df <- fread("/humgen/florezlab/UKBB_app27892/UKBB_app27892_download_may_2023/ukb672750.tab.gz",
                   data.table = FALSE, stringsAsFactors = FALSE)
 
-supp_touchscreen_long_df <- extra_df %>%  # Supplements reported on touchscreen
-  select(f.eid, contains("f.6179")) %>%
+supp_touchscreen_df <- extra_df %>%  # Supplements reported on touchscreen
+  select(f.eid, contains("f.6179.0")) %>%  # All baseline
   mutate(across(-f.eid, ~ case_when(
     . == 1 ~ 1,  # Fish oil choice -> 1
     . %in% c(2:6, -7, -3) ~ 0,  # Anything else (in addition to none and prefer not to answer) -> 0
@@ -409,25 +410,24 @@ supp_touchscreen_long_df <- extra_df %>%  # Supplements reported on touchscreen
                     function(x) ifelse(all(is.na(x)), NA, 
                                        as.integer(any(x == 1, na.rm = TRUE))))
 
-supp_verbal_long_df <- extra_df %>%  # Supplements reported in verbal interview
-  select(f.eid, contains("f.20003")) %>%
-  # filter(if_any(contains("f.20003"), ~ . == 1193)) %>%  # To reduce the size of the dataset
+supp_verbal_df <- extra_df %>%  # Supplements reported in verbal interview
+  select(f.eid, contains("f.20003.0")) %>%
   select(f.eid, where(~ any(. == 1193, na.rm = TRUE))) %>%
   wrangle_long_data(c(fish_oil_verbal = 20003),
                     function(x) as.integer(any(x == 1193, na.rm = TRUE)))  # Assumes fully-missing answers means no reported supplementation
 
-supp_long_df <- supp_touchscreen_long_df %>%
-  inner_join(supp_verbal_long_df, by=c("id", "instance"))
+supp_df <- supp_touchscreen_df %>%
+  inner_join(supp_verbal_df, by = "id")
 
-saveRDS(supp_long_df, "supp_long_df.rds")
+saveRDS(supp_df, "supp_df.rds")
 
 # Merge dietary data from various sources
 
-full_diet_long_df <- diet_supp_24hr_collapsed_df %>%
-  full_join(ffq_long_df, by=c("id", "instance")) %>%
-  full_join(supp_long_df, by=c("id", "instance"))
+full_diet_df <- diet_supp_24hr_collapsed_df %>%
+  full_join(ffq_df, by = "id") %>%
+  full_join(supp_df, by = "id")
 
-saveRDS(full_diet_long_df, "full_diet_long_df.rds")
+saveRDS(full_diet_df, "full_diet_df.rds")
 
 
 ### NMR metabolomics -----------------------------------------------------------
@@ -438,11 +438,10 @@ pufa_metabolites <- c("Omega_3", "Omega_6",
                       "Omega_6_by_Omega_3",
                       "DHA", "DHA_pct")
 
-nmr_long_df <- fread("../data/processed/nmr/nmr_data.csv", 
+nmr_df <- fread("../data/processed/nmr/nmr_data.csv", 
                 data.table = FALSE, stringsAsFactors = FALSE) %>%
-  mutate(instance = as.character(visit_index)) %>%
-  select(id = eid, instance, all_of(pufa_metabolites)) 
-
+  filter(visit_index == 0) %>%
+  select(id = eid, all_of(pufa_metabolites)) 
 
 ### Add genetic PCs and relatedness --------------------------------------------
 
@@ -456,29 +455,29 @@ saveRDS(gPC_df, "gPC_df.rds")
 
 ### Merge and write "raw" phenotypes -------------------------------------------
 
-# ac_long_df <- readRDS("ac_long_df.rds")
-# basic_phenos_long_df <- readRDS("basic_phenos_long_df.rds")
-# covariate_long_df <- readRDS("covariate_long_df.rds")
-# biomarker_long_df <- readRDS("biomarker_long_df.rds")
-# medical_df <- readRDS("medical_df.rds")
-# full_diet_long_df <- readRDS("full_diet_long_df.rds")
-# gPC_df <- readRDS("gPC_df.rds")
+ac_df <- readRDS("ac_df.rds")
+basic_phenos_df <- readRDS("basic_phenos_df.rds")
+covariate_df <- readRDS("covariate_df.rds")
+biomarker_df <- readRDS("biomarker_df.rds")
+medical_df <- readRDS("medical_df.rds")
+full_diet_df <- readRDS("full_diet_df.rds")
+gPC_df <- readRDS("gPC_df.rds")
 
-withdrawn_consent <- scan("/humgen/florezlab/UKBB_app27892/withdraw27892_232_14_Nov_2022.txt", what=character())
+withdrawn_consent <- scan("/humgen/florezlab/UKBB_app27892/withdraw/withdraw27892_232_14_Nov_2022.txt", what=character())
 
-phenos <- ac_long_df %>%
-  left_join(basic_phenos_long_df, by=c("id", "instance")) %>%
-  left_join(covariate_long_df, by=c("id", "instance")) %>%
-  left_join(biomarker_long_df, by=c("id", "instance")) %>%
-  left_join(medical_df, by="id") %>%
-  left_join(full_diet_long_df, by=c("id", "instance")) %>%
-  left_join(nmr_long_df, by=c("id", "instance")) %>%
-  left_join(gPC_df, by="id") %>%
+phenos <- ac_df %>%
+  left_join(basic_phenos_df, by = "id") %>%
+  left_join(covariate_df, by = "id") %>%
+  left_join(biomarker_df, by = "id") %>%
+  left_join(medical_df, by = "id") %>%
+  left_join(full_diet_df, by = "id") %>%
+  left_join(nmr_df, by = "id") %>%
+  left_join(gPC_df, by = "id") %>%
   filter(!(id %in% withdrawn_consent)) %>%
   mutate(id = format(id, scientific=FALSE)) %>%
   mutate(across(contains("gPC"), ~. * mds, .names="mdsBy{.col}"))
 
-write_csv(phenos, "../data/processed/ukb_phenos_longitudinal_raw.csv")
+write_csv(phenos, "../data/processed/ukb_phenos_raw.csv")
 
 ### Phenotype processing and exclusions ----------------------------------------
 
@@ -504,11 +503,11 @@ processed_phenos <- phenos %>%
 
 ### Write processed phenotypes -------------------------------------------------
 
-write_csv(processed_phenos, "../data/processed/ukb_phenos_longitudinal.csv")
+write_csv(processed_phenos, "../data/processed/ukb_phenos.csv")
 
 processed_phenos %>%
   filter(unrelated == TRUE) %>%
-  write_csv("../data/processed/ukb_phenos_longitudinal_unrelated.csv")
+  write_csv("../data/processed/ukb_phenos_unrelated.csv")
 
 ### Add Pan-UKBB data to generate European subset ------------------------------
 
@@ -527,32 +526,32 @@ processed_phenos_panUKBB <- processed_phenos %>%
   mutate(across(contains("gPC"), ~. * mds, .names = "mdsBy{.col}"))
 
 processed_phenos_panUKBB %>%
-  write_csv("../data/processed/ukb_phenos_longitudinal_panUKBB.csv")
+  write_csv("../data/processed/ukb_phenos_panUKBB.csv")
 
 processed_phenos_panUKBB %>%
   filter(ancestry == "EUR") %>%
-  write_csv("../data/processed/ukb_phenos_longitudinal_EUR.csv")
+  write_csv("../data/processed/ukb_phenos_EUR.csv")
 
 processed_phenos_panUKBB %>%
   filter(ancestry == "EUR", unrelated == TRUE) %>%
-  write_csv("../data/processed/ukb_phenos_longitudinal_EUR_unrelated.csv")
+  write_csv("../data/processed/ukb_phenos_EUR_unrelated.csv")
 
 processed_phenos_panUKBB %>%
   filter(ancestry == "AFR", unrelated == TRUE) %>%
-  write_csv("../data/processed/ukb_phenos_longitudinal_AFR_unrelated.csv")
+  write_csv("../data/processed/ukb_phenos_AFR_unrelated.csv")
 
 processed_phenos_panUKBB %>%
   filter(ancestry == "AMR", unrelated == TRUE) %>%
-  write_csv("../data/processed/ukb_phenos_longitudinal_AMR_unrelated.csv")
+  write_csv("../data/processed/ukb_phenos_AMR_unrelated.csv")
 
 processed_phenos_panUKBB %>%
   filter(ancestry == "CSA", unrelated == TRUE) %>%
-  write_csv("../data/processed/ukb_phenos_longitudinal_CSA_unrelated.csv")
+  write_csv("../data/processed/ukb_phenos_CSA_unrelated.csv")
 
 processed_phenos_panUKBB %>%
   filter(ancestry == "EAS", unrelated == TRUE) %>%
-  write_csv("../data/processed/ukb_phenos_longitudinal_EAS_unrelated.csv")
+  write_csv("../data/processed/ukb_phenos_EAS_unrelated.csv")
 
 processed_phenos_panUKBB %>%
   filter(ancestry == "MID", unrelated == TRUE) %>%
-  write_csv("../data/processed/ukb_phenos_longitudinal_MID_unrelated.csv")
+  write_csv("../data/processed/ukb_phenos_MID_unrelated.csv")
