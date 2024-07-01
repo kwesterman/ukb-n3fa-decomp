@@ -72,3 +72,9 @@ left_join(bim, ref, by=c("CHR", "BP")) %>%
   select(CHR, rsID, POS, BP, A1, A2) %>%
   write_tsv("${ldref_dir}/ukb_20k_hg19.bim", col_names=FALSE)
 EOF
+
+##${plink2_dir}/plink2 \
+##	--bfile ${ldref_dir}/ukb_20k_hg19 \
+##	--sort-vars \
+##	--make-bed \
+##	--out ${ldref_dir}/ukb_20k_hg19_sorted

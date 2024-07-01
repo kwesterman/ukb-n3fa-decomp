@@ -36,26 +36,6 @@ expand_grid(
   theme(axis.title = element_blank())
 ```
 
-```{r n3fa-variables}
-fish_var_corr_df <- expand_grid(
-  var1 = n3fa_variables,
-  var2 = n3fa_variables
-) %>%
-  rowwise() %>%
-  mutate(corr_fit = list(broom::tidy(cor.test(phenos[[var1]], 
-                                              phenos[[var2]])))) %>%
-  unnest(corr_fit) %>%
-  mutate(across(c(var1, var2), 
-                ~ factor(., levels = n3fa_variables, 
-                         labels = n3fa_variables_clean)))
-fish_var_corr_df %>%
-  ggplot(aes(x = var1, y = var2, fill = estimate)) +
-  geom_tile() + 
-  scale_fill_gradient2(name = "Pearson\ncorrelation") +
-  labs(x = "", y = "", title = "Correlations between N3FA intake variables") +
-  theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
-```
-
 ```{r prep-diet-bm-regressions}
 run_diet_bm_lm <- function(dv, bm, covars = c("age", "sex"), df = phenos,
                            std = FALSE) {
@@ -118,6 +98,26 @@ phenos <- phenos %>%
          education = ifelse(is.na(education), "Missing", education),
          across(all_of(c(ffq_covars, "bmi")), 
                 ~ ifelse(is.na(.), median(., na.rm = TRUE), .)))
+```
+
+```{r n3fa-variables}
+n3fa_var_corr_df <- expand_grid(
+  var1 = n3fa_variables,
+  var2 = n3fa_variables
+) %>%
+  rowwise() %>%
+  mutate(corr_fit = list(broom::tidy(cor.test(phenos[[var1]], 
+                                              phenos[[var2]])))) %>%
+  unnest(corr_fit) %>%
+  mutate(across(c(var1, var2), 
+                ~ factor(., levels = n3fa_variables, 
+                         labels = n3fa_variables_clean)))
+n3fa_var_corr_df %>%
+  ggplot(aes(x = var1, y = var2, fill = estimate)) +
+  geom_tile() + 
+  scale_fill_gradient2(name = "Pearson\ncorrelation") +
+  labs(x = "", y = "", title = "Correlations between N3FA intake variables") +
+  theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
 ```
 
 We start with some basic regression models for diet-biomarker main effects, using baseline visit data only, to explore variations on (1) different fish/omega-3 intake variables and (2) different degrees of covariate adjustment. Outcomes will be TG (positive control, with a well-established negative effect from RCTs) and hsCRP (the primary outcome of interest, which also has fairly substantial literature support). 
@@ -200,17 +200,23 @@ phenos <- mutate(phenos, nonDHA_pct = Omega_3_pct - DHA_pct)
 ```{r ffq-imputed-n3fa}
 n3fa_impute_vars <- c("oily_fish", "nonoily_fish", "fish_oil_touchscreen", "fish_oil_verbal")
 n3fa_impute_lm_fit <- lm(
-  as.formula(paste0("Omega_3_pct ~ ", paste(n3fa_impute_vars, collapse = " + "))), 
-                    # " + ", paste(all_covars, collapse = " + "))),
+  as.formula(paste0("Omega_3_pct ~ ", paste(n3fa_impute_vars, collapse = " + "))),
   data = phenos)
 n3fa_impute_df <- phenos %>%
   select(all_of(n3fa_impute_vars)) %>%
   mutate(across(contains("fish_oil"), ~ if_else(is.na(.x), 0, .x)))
-n3fa_impute_df$n3fa_ffq <- predict(n3fa_impute_lm_fit, newdata = n3fa_impute_df)
-phenos$n3fa_ffq <- n3fa_impute_df$n3fa_ffq
+n3fa_impute_df$dn3fa <- predict(n3fa_impute_lm_fit, newdata = n3fa_impute_df)
+phenos$dn3fa <- n3fa_impute_df$dn3fa
+
+n3fa_impute_weights_df <- broom::tidy(n3fa_impute_lm_fit) %>%
+  filter(term != "(Intercept)") %>%
+  select(term, weight = estimate)
+n3fa_impute_weights_df %>%
+  kable(caption = "Weights for fish and fish oil-based N3FA intake estimation:") %>%
+  kable_styling(full_width = FALSE)
 
 more_lm_res_df <- expand_grid(
-  dv = c("oily_fish", "fish_oil_touchscreen", "n3fa_ffq"),
+  dv = c("oily_fish", "fish_oil_touchscreen", "dn3fa"),
   bm = c("hscrp_log", "tg_log", "ldl_statinadj"),
   covar_set = "ffqAdj"
   ) %>% 
@@ -219,8 +225,8 @@ more_lm_res_df <- expand_grid(
                                          phenos, std = TRUE))) %>%
   unnest(model_res)
 
-n3fa_variables <- c(n3fa_variables, "n3fa_ffq")
-n3fa_variables_clean <- c(n3fa_variables_clean, "Estimated N3FA - FFQ")
+n3fa_variables <- c(n3fa_variables, "dn3fa")
+n3fa_variables_clean <- c(n3fa_variables_clean, "Estimated dietary N3FA")
 
 more_lm_res_df %>%
   mutate(l95 = estimate - 1.96 * std.error,
@@ -240,6 +246,11 @@ more_lm_res_df %>%
        title = "Fish effect estimates from linear regression") +
   facet_wrap(~bm, nrow = 1, scales = "free_y") +
   theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
+
+lm_res_df <- bind_rows(
+  filter(lm_res_df, dv != "dn3fa"),
+  filter(more_lm_res_df, dv == "dn3fa")
+)
 ```
 
 ```{r nmr-corrs}
@@ -274,7 +285,123 @@ We see that oily fish is the most strongly-correlated fish intake measurement no
 
 Do we have evidence that the N3 percentage mediates any proportion of the relationship between oily fish intake and inflammation? Unlike the above, this mediation analysis will incorporate the full set of confounder adjustments used above.
 
-```{r nmr-mediation, cache = 1, eval = F}
+```{r nmr-mediation, cache = 1}
+test_mediation_std <- function(x, m, y, covars, df) {
+  df <- df %>%
+    select(all_of(c(x, m, y, covars))) %>%
+    na.omit() %>%
+    mutate(across(all_of(c(x, m, y)), \(x) as.vector(scale(x))))
+  med_form_str <- paste0(m, " ~ ", x, " + ", 
+                         paste(covars, collapse = " + "))
+  med_fit <- lm(as.formula(med_form_str), data = df)
+  out_form_str <- paste0(y, " ~ ", m, " + ", x, " + ",
+                         paste(covars, collapse = " + "))
+  out_fit <- lm(as.formula(out_form_str), data = df)
+  med_out <- mediation::mediate(med_fit, out_fit, treat = x, mediator = m, 
+                                robustSE = TRUE, sims = 20)
+  med_out$model.m <- NULL
+  med_out$model.y <- NULL
+  med_out
+}
+
+med_design_df <- expand_grid(
+  e = c("oily_fish", "fish_oil_touchscreen", "dn3fa"),
+  m = c("Omega_3_pct", "DHA_pct", "nonDHA_pct"),
+  y = c("hscrp_log")
+)
+std_med_res_df <- med_design_df %>%
+  rowwise() %>%
+  mutate(med_obj = list(test_mediation_std(e, m, y, all_covars, phenos)),
+         tau.coef = map_dbl(list(med_obj), \(x) x$tau.coef),
+         tau.p = map_dbl(list(med_obj), \(x) x$tau.p),
+         d.avg = map_dbl(list(med_obj), \(x) x$d.avg),
+         d.avg.p = map_dbl(list(med_obj), \(x) x$d.avg.p),
+         z.avg = map_dbl(list(med_obj), \(x) x$z.avg),
+         z.avg.p = map_dbl(list(med_obj), \(x) x$z.avg.p),
+         n.avg = map_dbl(list(med_obj), \(x) x$n.avg),
+         n.avg.p = map_dbl(list(med_obj), \(x) x$n.avg.p))
+```
+
+```{r nmr-mediation-viz}
+std_med_res_df %>%
+  select(-med_obj, -contains(".p")) %>%
+  pivot_longer(c(contains(".avg"), tau.coef), names_to = "quantity", values_to = "value") %>%
+  filter(
+    # y == "hscrp_log",
+    quantity != "n.avg",
+    quantity != "z.avg") %>%
+  mutate(quantity = factor(quantity,
+                           levels = c("tau.coef", "d.avg"),
+                           labels = c("Total effect", "Mediated effect"))) %>%
+  ggplot(aes(x = m, y = value, fill = quantity)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_fill_discrete(name = "") +
+  facet_grid(rows = vars(y), cols = vars(e), scales = "free_y") +
+  labs(x = "Plasma N3FA fraction", y = "Std. effect (SDy/SDx)") +
+  theme(axis.text.x = element_text(angle = 25, hjust = 0.9))
+```
+
+```{r nmr-mediation-neg-controls, cache = 1}
+nc_med_design_df <- expand_grid(
+  e = c("dn3fa", "oily_fish", "nonoily_fish", "raw_veg"),
+  m = c("Omega_3_pct"),
+  y = c("hscrp_log")
+)
+std_nc_med_res_df <- nc_med_design_df %>%
+  rowwise() %>%
+  mutate(med_obj = list(test_mediation_std(e, m, y, all_covars, phenos)),
+         tau.coef = map_dbl(list(med_obj), \(x) x$tau.coef),
+         tau.p = map_dbl(list(med_obj), \(x) x$tau.p),
+         d.avg = map_dbl(list(med_obj), \(x) x$d.avg),
+         d.avg.p = map_dbl(list(med_obj), \(x) x$d.avg.p),
+         z.avg = map_dbl(list(med_obj), \(x) x$z.avg),
+         z.avg.p = map_dbl(list(med_obj), \(x) x$z.avg.p),
+         n.avg = map_dbl(list(med_obj), \(x) x$n.avg),
+         n.avg.p = map_dbl(list(med_obj), \(x) x$n.avg.p))
+```
+
+These mediation results suggest that approximately all of the oily fish-hsCRP relationship is mediated through the effect of oily fish on blood N3 levels. This is not surprising mechanistically, and even suggests that blood N3 concentrations (or percentage) might be a more effective measure of the biologically relevant components of the fish intake exposure than self-reported components. Notably, a second mediation analysis that contains only minimal covariate adjustment (age & sex) retains a modestly significant ADE and a proportion mediated that is less than one. This is a nice negative control of sorts, because we expect blood N3 levels to mediate the effect of fish intake, but not the effect of other lifestyle and socioeconomic factors correlated with fish intake.
+
+# Export datasets for interaction modeling and manuscript
+
+```{r export-modeling}
+gwis_bms <- c("hscrp_log", "tg_log", "ldl_statinadj")
+gwis_variables <- c("id", 
+                    gwis_bms, 
+                    c(n3fa_variables, "fish_oil"), 
+                    pufa_metabolites, 
+                    all_covars, paste0("gPC", 1:10))
+
+gwis_df <- phenos %>%
+  filter(if_all(all_of(c(gwis_bms, all_covars)), ~ !is.na(.))) %>%
+  mutate(fish_oil = fish_oil_touchscreen)
+
+mm_form <- as.formula(paste("~ 1 + ", paste(gwis_variables, collapse = " + ")))
+gwis_mat <- model.matrix(
+  mm_form, 
+  model.frame(mm_form, gwis_df, na.action = na.pass)
+)[, -1]  # Need intercept in formula to drop level from each factor, but don't want to keep it
+colnames(gwis_mat) <- make.names(colnames(gwis_mat))
+gwis_covars <- setdiff(colnames(gwis_mat), 
+                       c("id", gwis_bms, n3fa_variables, "fish_oil", pufa_metabolites))
+write(gwis_covars, "../data/processed/gwis_covariates.txt")
+write_csv(as_tibble(gwis_mat), "../data/processed/ukb_gwis_phenos.csv")
+```
+
+```{r export-manuscript}
+saveRDS(covar_sets, "../data/processed/manuscript/covar_sets_list.rds")
+saveRDS(covar_set_labels, "../data/processed/manuscript/covar_set_labels.rds")
+saveRDS(phenos, "../data/processed/manuscript/phenos.rds")
+saveRDS(lm_res_df, "../data/processed/manuscript/lm_res_df.rds")
+saveRDS(pheno_corr_df, "../data/processed/manuscript/pheno_corr_df.rds")
+saveRDS(n3fa_impute_weights_df, "../data/processed/manuscript/n3fa_impute_weights_df.rds")
+saveRDS(std_med_res_df, "../data/processed/manuscript/std_med_res_df.rds")
+saveRDS(std_nc_med_res_df, "../data/processed/manuscript/std_nc_med_res_df.rds")
+```
+
+# Archive
+
+```{r nmr-mediation-old, cache = 1, eval = F}
 test_mediation <- function(x, m, y, covars, df) {
   df <- df %>%
     select(all_of(c(x, m, y, covars))) %>%
@@ -321,10 +448,10 @@ plot(neg_control_obj, main = "Raw vegetable intake mediation test (healthy lifes
 summary(neg_control_obj)
 
 print("FFQ_N3FA - N3FA - hsCRP:")
-n3fa_ffq_med_obj <- test_mediation(
-  "n3fa_ffq", "Omega_3_pct", "hscrp_log", all_covars, phenos
+dn3fa_med_obj <- test_mediation(
+  "dn3fa", "Omega_3_pct", "hscrp_log", all_covars, phenos
 )
-summary(n3fa_ffq_med_obj)
+summary(dn3fa_med_obj)
 
 print("Fish oil - N3FA - hsCRP:")
 fish_oil_med_obj <- test_mediation(
@@ -362,165 +489,3 @@ epa_med_obj <- test_mediation(
 )
 summary(epa_med_obj)
 ```
-
-```{r nmr-mediation-2, cache = 1}
-test_mediation_std <- function(x, m, y, covars, df) {
-  df <- df %>%
-    select(all_of(c(x, m, y, covars))) %>%
-    na.omit() %>%
-    mutate(across(all_of(c(x, m, y)), \(x) as.vector(scale(x))))
-  med_form_str <- paste0(m, " ~ ", x, " + ", 
-                         paste(covars, collapse = " + "))
-  med_fit <- lm(as.formula(med_form_str), data = df)
-  out_form_str <- paste0(y, " ~ ", m, " + ", x, " + ",
-                         paste(covars, collapse = " + "))
-  out_fit <- lm(as.formula(out_form_str), data = df)
-  med_out <- mediation::mediate(med_fit, out_fit, treat = x, mediator = m, 
-                                robustSE = TRUE, sims = 20)
-  med_out$model.m <- NULL
-  med_out$model.y <- NULL
-  med_out
-}
-
-med_design_df <- expand_grid(
-  e = c("oily_fish", "fish_oil_touchscreen", "n3fa_ffq"),
-  m = c("Omega_3_pct", "DHA_pct", "nonDHA_pct"),
-  y = c("hscrp_log", "tg_log", "ldl_statinadj")
-)
-std_med_res_df <- med_design_df %>%
-  rowwise() %>%
-  mutate(med_obj = list(test_mediation_std(e, m, y, all_covars, phenos)),
-         tau.coef = map_dbl(list(med_obj), \(x) x$tau.coef),
-         tau.p = map_dbl(list(med_obj), \(x) x$tau.p),
-         d.avg = map_dbl(list(med_obj), \(x) x$d.avg),
-         d.avg.p = map_dbl(list(med_obj), \(x) x$d.avg.p),
-         z.avg = map_dbl(list(med_obj), \(x) x$z.avg),
-         z.avg.p = map_dbl(list(med_obj), \(x) x$z.avg.p),
-         n.avg = map_dbl(list(med_obj), \(x) x$n.avg),
-         n.avg.p = map_dbl(list(med_obj), \(x) x$n.avg.p))
-```
-
-```{r nmr-mediation-viz}
-std_med_res_df %>%
-  select(-med_obj, -contains(".p")) %>%
-  pivot_longer(c(contains(".avg"), tau.coef), names_to = "quantity", values_to = "value") %>%
-  filter(
-    # y == "hscrp_log",
-    quantity != "n.avg",
-    quantity != "z.avg") %>%
-  mutate(quantity = factor(quantity,
-                           levels = c("tau.coef", "d.avg"),
-                           labels = c("Total effect", "Mediated effect"))) %>%
-  ggplot(aes(x = m, y = value, fill = quantity)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  scale_fill_discrete(name = "") +
-  facet_grid(rows = vars(y), cols = vars(e), scales = "free_y") +
-  labs(x = "Plasma N3FA fraction", y = "Std. effect (SDy/SDx)") +
-  theme(axis.text.x = element_text(angle = 25, hjust = 0.9))
-```
-
-These mediation results suggest that approximately all of the oily fish-hsCRP relationship is mediated through the effect of oily fish on blood N3 levels. This is not surprising mechanistically, and even suggests that blood N3 concentrations (or percentage) might be a more effective measure of the biologically relevant components of the fish intake exposure than self-reported components. Notably, a second mediation analysis that contains only minimal covariate adjustment (age & sex) retains a modestly significant ADE and a proportion mediated that is less than one. This is a nice negative control of sorts, because we expect blood N3 levels to mediate the effect of fish intake, but not the effect of other lifestyle and socioeconomic factors correlated with fish intake.
-
-# Export datasets for interaction modeling and manuscript
-
-```{r export-modeling}
-gwis_bms <- c("hscrp_log", "tg_log", "ldl_statinadj")
-gwis_variables <- c("id", 
-                    gwis_bms, 
-                    c(n3fa_variables, "fish_oil", "n3fa_ffq"), 
-                    pufa_metabolites, 
-                    all_covars, paste0("gPC", 1:10))
-
-gwis_df <- phenos %>%
-  filter(if_all(all_of(c(gwis_bms, all_covars)), ~ !is.na(.))) %>%
-  mutate(fish_oil = fish_oil_touchscreen)
-
-mm_form <- as.formula(paste("~ 1 + ", paste(gwis_variables, collapse = " + ")))
-gwis_mat <- model.matrix(
-  mm_form, 
-  model.frame(mm_form, gwis_df, na.action = na.pass)
-)[, -1]  # Need intercept in formula to drop level from each factor, but don't want to keep it
-colnames(gwis_mat) <- make.names(colnames(gwis_mat))
-gwis_covars <- setdiff(colnames(gwis_mat), 
-                       c("id", 
-                         c(gwis_bms, "n3fa_ffq"), 
-                         c(n3fa_variables, "fish_oil"), 
-                         pufa_metabolites))
-write(gwis_covars, "../data/processed/gwis_covariates.txt")
-write_csv(as_tibble(gwis_mat), "../data/processed/ukb_gwis_phenos.csv")
-```
-
-```{r export-manuscript}
-saveRDS(covar_sets, "../data/processed/manuscript/covar_sets_list.rds")
-saveRDS(covar_set_labels, "../data/processed/manuscript/covar_set_labels.rds")
-saveRDS(phenos, "../data/processed/manuscript/phenos.rds")
-saveRDS(lm_res_df, "../data/processed/manuscript/lm_res_df.rds")
-saveRDS(pheno_corr_df, "../data/processed/manuscript/pheno_corr_df.rds")
-saveRDS(ancestry_plot_data, "../data/processed/manuscript/ancestry_plot_data.rds")
-saveRDS(list(main = main_med_obj, unadj = unadj_med_obj, nc = neg_control_obj),
-        "../data/processed/manuscript/med_obj_list.rds")
-```
-
-# To-do
-
-## Influence of mixed models
-
-Does use of a mixed model, with a random effect governed by a diet-based covariance matrix, change effect estimates or precision compared to either unadjusted models or models using dietary fixed effects?
-
-```{r diet-lmm, eval=F}
-run_diet_bm_mixed_model <- function(dv, bm, df,
-                                    covars=c("age", "sex"), 
-                                    diet_covars=mds_components, 
-                                    n_recalls_min=1,
-                                    max_n=10000) {
-  # lmm_df <- filter(df, num_recalls >= n_recalls_min)
-  if (nrow(lmm_df) > max_n) lmm_df <- sample_n(lmm_df, max_n)
-  print(dim(lmm_df))
-  dv_mat <- scale(lmm_df[, setdiff(mds_components, dv)])
-  diet_rel_mat <- dv_mat %*% t(dv_mat)
-  rownames(diet_rel_mat) <- lmm_df$id
-  colnames(diet_rel_mat) <- lmm_df$id
-  lmm_str <- paste0(bm, " ~ ", dv, " + ", paste0(covars, collapse=" + "))
-  GMMAT::glmmkin(
-    as.formula(lmm_str),
-    data=lmm_df,
-    kins=diet_rel_mat,
-    id="id",
-    family=gaussian(link="identity")
-  )
-  # lm_summ <- tryCatch({
-  #   lm(as.formula(lm_str), data=lm_df) %>%
-  #     broom::tidy() %>%
-  #     filter(term == dv)
-  # }, error=tibble(NA))
-  # lm_summ
-}
-
-summarize_glmmkin <- function(glmmkin_obj, target) {
-  beta <- glmmkin_obj$coefficients[target]
-  se <- sqrt(glmmkin_obj$cov[target, target])
-  p <- pchisq((beta / se)^2, df=1, lower.tail=FALSE)
-  tibble(estimate = beta, std.error = se, p.value = p)
-}
-
-# set.seed(123)
-# my_df <- sample_n(filter(phenos, num_recalls >= 4), 4000)
-# 
-# system.time(a <- run_diet_bm_mixed_model("oily_fish", "hscrp_log", my_df, n_recalls_min=5))
-# system.time(a <- run_diet_bm_mixed_model("REDPRMEAT", "hscrp_log", my_df, max_n=5000, n_recalls_min=4))
-# b <- run_diet_bm_model("REDPRMEAT", "hscrp_log", df=my_df, n_recalls_min=4) 
-# d <- run_diet_bm_model("REDPRMEAT", "hscrp_log", covars=c("age", "sex", mds_components), 
-#                        df=my_df, n_recalls_min=4) 
-# 
-# summarize_glmmkin(a, "REDPRMEAT")
-# b
-# d
-```
-
-```{r testing-nmr-prediction, eval=F}
-target_met <- "Omega_3_pct"
-predictor_mets <- setdiff(names(metabolite_df), target_met)
-pred_lm_str <- paste0(target_met, " ~ ", paste(predictor_mets, collapse = " + "))
-pred_lm <- lm(as.formula(pred_lm_str), data = metabolite_df)
-```
-

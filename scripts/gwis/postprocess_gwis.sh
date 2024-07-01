@@ -22,3 +22,5 @@ for chr in {1..22}; do
 done
 
 Rscript gwis/postprocess_gwis.R ${fn_prefix}_merged
+
+#gwis/clump.sh ${fn_prefix}
