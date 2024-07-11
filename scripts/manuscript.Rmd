@@ -32,7 +32,7 @@ power_sim_res <- readRDS("../data/processed/manuscript/power_sim_res_df.rds")
 wghs_rep_df <- readRDS("../data/processed/manuscript/up_down_rep_df.rds")
 ```
 
-# Simulations
+# Concept and simulations
 
 ```{r run-simulations, cache=1}
 run_upstream_sim <- function(pv_gxe_m, pv_m_y, icc_m) {
@@ -118,35 +118,48 @@ downstream_sim_res_df <- expand_grid(
 ```
 
 ```{r plot-simulations, fig.asp=1.2}
-upstream_sim_res_df %>%
+select_upstream_sims_plt <- upstream_sim_res_df %>%
   filter(icc_m == 1) %>%
   mutate(across(c(pv_gxe_m), ~ factor(.x)),
          approach = factor(approach,
-                           levels = c("std", "med"),
-                           labels = c("Standard", "Upstream"))) %>%
+                           levels = c("std", "med", "downstream"),  # Not present but want the label
+                           labels = c("Standard", "Upstream", "Downstream"))) %>%
   rename(`PV (GxE -> M)` = pv_gxe_m) %>%
   ggplot(aes(x = pv_m_y, y = pwr, group = approach, color = approach)) +
   geom_point() +
   geom_line() +
-  scale_color_discrete(name = "Approach") + 
+  scale_color_discrete(name = "Approach", drop = FALSE) + 
   facet_wrap(vars(`PV (GxE -> M)`), ncol = 1, labeller = label_both) +
-  labs(x = "Proportion of variance in Y explained by M",
+  labs(x = "Prop. var. (M -> Y)",
        y = "Statistical power")
 
-downstream_sim_res_df %>%
+select_downstream_sims_plt <- downstream_sim_res_df %>%
   filter(icc_m == 1) %>%
   mutate(across(c(pv_gxm_y), ~ factor(.x)),
          approach = factor(approach,
-                           levels = c("std", "med"),
-                           labels = c("Standard", "Downstream"))) %>%
+                           levels = c("std", "upstream", "med"),  # Not present but want the label
+                           labels = c("Standard", "Upstream", "Downstream"))) %>%
   rename(`PV (GxM -> Y)` = pv_gxm_y) %>%
   ggplot(aes(x = pv_e_m, y = pwr, group = approach, color = approach)) +
   geom_point() +
   geom_line() +
-  scale_color_discrete(name = "Approach") + 
+  scale_color_discrete(name = "Approach", drop = FALSE) + 
   facet_wrap(vars(`PV (GxM -> Y)`), ncol = 1, labeller = label_both) +
-  labs(x = "Proportion of variance in M explained by E",
+  labs(x = "Prop. var. (E -> M)",
        y = "Statistical power")
+select_downstream_sims_plt
+
+select_sims_plt <- (select_upstream_sims_plt + theme(legend.position = "none")) + 
+  (select_downstream_sims_plt + theme(axis.title.y = element_blank()))
+
+decomp_concept_plt <- ggdraw() + (
+  magick::image_read_pdf("../data/processed/manuscript/concept_fig_diagram.pdf", density = 300) %>%
+    magick::image_trim() %>%
+    draw_image()
+)
+
+decomp_concept_plt / select_sims_plt +
+  plot_annotation(tag_levels = "a")
 
 upstream_example_subset <- filter(upstream_sim_res_df,
                                   pv_gxe_m == 0.005,
@@ -207,7 +220,30 @@ Extracting a few key summary data points:
 # Basic summaries
 
 ```{r table-1}
-print("Placeholder for Table 1")
+summarize_continuous <- function(x) {
+  m <- format(round(mean(x, na.rm = TRUE), 1), nsmall = 1)
+  s <- format(round(sd(x, na.rm = TRUE), 1), nsmall = 1)
+  paste0(m, " (", s, ")")
+}
+
+summ <- phenos %>%
+  summarise(N = n(),
+            `Sex, % female` = round(sum(sex == 0) / n() * 100, 1),
+            `Age, years` = summarize_continuous(age),
+            `BMI, kg/m^2` = summarize_continuous(bmi),
+            `Oily fish intake (servings/d)` = summarize_continuous(oily_fish),
+            `pN3FA (% of total fatty acids)` = summarize_continuous(Omega_3_pct))
+
+pop_description_tbl <- as.data.frame(t(summ)) %>%
+  rownames_to_column() %>%
+  as.data.frame()
+
+pop_description_tbl %>%
+  write_csv("../output/manuscript/pop_description.csv", col_names = FALSE)
+
+pop_description_tbl %>%
+  kable(caption = "Population description") %>%
+  kable_styling()
 ```
 
 ```{r dag}
@@ -236,8 +272,11 @@ pdf("../data/processed/manuscript/main_dag.pdf")
 plot(n3fa_hscrp_dag_spec)
 dev.off()
 
-n3fa_hscrp_dag <- ggdraw() + 
-  draw_image(magick::image_read_pdf("../data/processed/manuscript/main_dag.pdf", density = 300))
+n3fa_hscrp_dag <- ggdraw() + (
+  magick::image_read_pdf("../data/processed/manuscript/main_dag.pdf", density = 300) %>%
+    magick::image_trim() %>%
+    draw_image()
+)
 ```
 
 # Main effects analysis
@@ -298,28 +337,6 @@ dv_choice_plt <- lm_res_df %>%
        y = "Standardized effect estimate (95% CI)") +
   theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
 
-# covar_choice_plt <- lm_res_df %>%
-#   filter(bm == "hscrp_log",
-#          dv == "oily_fish") %>%
-#   mutate(l95 = estimate - 1.96 * std.error,
-#          u95 = estimate + 1.96 * std.error,
-#          covar_set = factor(covar_set, levels = names(covar_sets),
-#                             labels = covar_set_labels),
-#          dv = factor(dv, levels = n3fa_variables, 
-#                      labels = n3fa_variables_clean),
-#          bm = factor(bm, levels = c("hscrp_log", "tg_log"),
-#                      labels = c("log(hsCRP)", "log(TG)"))) %>%
-#   ggplot(aes(x = covar_set, y = estimate)) +
-#   geom_point(position = position_dodge(width = 0.4)) +
-#   geom_errorbar(aes(ymin = l95, ymax = u95),
-#                 position = position_dodge(width = 0.4), width = 0.2) +
-#   geom_hline(yintercept = 0, color = "gray") + 
-#   # scale_color_discrete(name = "Adjustment set") + 
-#   labs(x = "Covariate set",
-#        y = "Standardized effect estimate (95% CI)") +
-#   facet_wrap(~bm, nrow = 2, scales = "free_y") +
-#   theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
-
 (n3fa_hscrp_dag + free(n3fa_var_corr_plt) + plot_layout(widths = c(2, 3))) /
   free(dv_choice_plt) +
   plot_annotation(tag_levels = "a")
@@ -364,7 +381,8 @@ dn3fa_impute_weights_plt <- dn3fa_impute_weights_df %>%
   theme(axis.text.x = element_text(angle = 30, hjust = 0.9))
 
 n3fa_pufa_corr_heatmap + dn3fa_impute_weights_plt +
-  plot_layout(widths = c(1, 2))
+  plot_layout(widths = c(1, 2)) +
+  plot_annotation(tag_levels = "a")
 ```
 
 ```{r mediation}
@@ -428,14 +446,20 @@ nc_justification_plt <- phenos %>%
   pivot_longer(-var1, names_to = "var2", values_to = "corr") %>%
   filter(var1 %in% c("oily_fish", "raw_veg"),
          !(var2 %in% c("oily_fish", "raw_veg"))) %>%
-  mutate(var2 = fct_relevel(var2, "hscrp_log")) %>%
+  mutate(var1 = factor(var1,
+                       levels = c("oily_fish", "raw_veg"),
+                       labels = c("Oily fish", "Raw vegetables")),
+         var2 = fct_relevel(var2, "hscrp_log"),
+         var2 = factor(var2,
+                       levels = c("hscrp_log", "college", "high_income", "smoking_ever"),
+                       labels = c("log(hsCRP)", "College degree", "Income >52k", "Ever smoking"))) %>%
   ggplot(aes(x = var2, y = corr, fill = var1)) +
   geom_bar(stat = "identity", position = position_dodge()) +
   scale_fill_discrete(name = "FFQ trait") +
-  labs(x = "Variable", y = "Pearson correlation")
+  labs(x = "", y = "Pearson correlation")
 ```
 
-```{r mediation-negative-control, fig.asp = 0.6}
+```{r mediation-negative-control, fig.asp = 0.8}
 std_nc_med_res_df <- readRDS("../data/processed/manuscript/std_nc_med_res_df.rds") %>%
   mutate(tau.ci.lower = map_dbl(list(med_obj), \(x) x$tau.ci[1]),
          tau.ci.upper = map_dbl(list(med_obj), \(x) x$tau.ci[2]),
@@ -451,14 +475,16 @@ nc_med_plt <- std_nc_med_res_df %>%
                names_pattern = "([a-z]+)\\.(.*)",
                values_to = "value") %>%
   pivot_wider(names_from = "quantity", values_from = "value") %>%
-  mutate(estimate = factor(estimate, levels = c("tau", "d", "z"),
+  mutate(e = factor(e,
+                    levels = c("oily_fish", "nonoily_fish", "raw_veg"),
+                    labels = c("Oily fish", "Non-oily fish", "Raw vegetables")),,
+         estimate = factor(estimate, levels = c("tau", "d", "z"),
                            labels = c("Total effect", "Mediated effect", "Direct effect"))) %>%
   ggplot(aes(x = e, y = coef, fill = estimate)) +
   geom_bar(stat = "identity", position = position_dodge()) +
-  # geom_errorbar(aes(ymin = ci.lower, ymax = ci.upper), width = 0) +
   geom_hline(yintercept = 0, color = "gray") +
-  scale_fill_discrete(name = "") +
-  labs(x = "Mediation quantity", y = "Estimate (dN3FA - pN3FA - hsCRP)")
+  scale_fill_discrete(name = "Mediation quantity") +
+  labs(x = "Dietary exposure", y = "Estimate (dN3FA - pN3FA - hsCRP)")
 
 nc_justification_plt / nc_med_plt +
   plot_layout(heights = c(1, 2)) +
@@ -498,7 +524,6 @@ downstream_gwis_df <- read_tsv("../data/processed/gwis/Omega_3_pct_hscrp_log_mer
 # Make a Miami plot -- credit to RaMWAS package (pruning unneeded points)
 # and hudson package (basis for Miami plot functionality)
 
-# data <- filter(data, data[[pval_col_1]] > 0, data[[pval_col_2]] > 0)
 nlps1 <- -log10(upstream_gwis_df[["robust_P_int"]])
 nlps2 <- -log10(downstream_gwis_df[["robust_P_int"]])
 
@@ -553,15 +578,6 @@ names(lims) <- c("Color",
 lims$av <- (lims$xcoordmin + lims$xcoordmax)/2
 lims <- lims[order(lims$Color),]
 
-# gw_int_snps <- whr_ss$RSID[whr_ss$P_Value_Interaction < 5e-8]
-# gw_joint_noMarg_snps <- whr_ss$RSID[whr_ss$P_Value_Joint < 5e-8 &
-#                                     whr_ss$P_Value_Main > 5e-8]
-# d_order$Color <- case_when(
-#   d_order$SNP %in% int_marg_snps ~ "30",
-#   d_order$SNP %in% int_nomarg_snps ~ "31",
-#   d_order$SNP %in% joint_nomarg_snps ~ "32",
-#   TRUE ~ as.character(d_order$CHR)
-# )
 d_order$Color <- as.character(d_order$CHR)
 newcols <-c(rep(x=c("#AAAAAA", "#8A8A8A"), length.out=22, each=1),  # Gray/dark gray for alternating chromosomes
             RColorBrewer::brewer.pal(3, "Dark2")[c(2, 3, 1)])
@@ -597,9 +613,6 @@ p2 <- ggplot(data=filter(d_order, Location == "Bottom"),
                      labels=lims$Color[c(1:16, 18, 20, 20, 22)], 
                      expand=c(0,0)) +
   scale_colour_manual(name = "Color", values = newcols,
-                      # breaks=c(30, 31),
-                      # labels=c("Genome-wide significant joint test, no genome-wide significant marginal test",
-                      #          "Genome-wide significant interaction test")
   ) +
   scale_fill_manual(name = "Color", values = newcols) +
   ylab(expression(-log[10](p) - Interaction)) +
@@ -611,81 +624,8 @@ p2 <- ggplot(data=filter(d_order, Location == "Bottom"),
   scale_y_reverse(limits=c(15,0), breaks = seq(0, 15, 5), expand = c(0, 0),
                   name=expression(-log[10](italic(p)[int]) - Downstream))
 
-# color_legend <- get_legend(
-#   p2 + 
-#     theme(
-#       legend.title=element_blank(), 
-#       legend.background=element_rect(size=rel(0.5)),
-#       legend.key.size=unit(0.1, "lines"),
-#       legend.text=element_text(size=10)
-#     ) + 
-#     guides(color=guide_legend(override.aes=list(size=2.5)))
-# )
-
 (p1 + guides(color = FALSE)) /  
   (p2 + guides(color = FALSE))
-```
-
-```{r gmv-chatgpt}
-# Calculate -log10(p-values) for upstream and downstream data
-nlps1 <- -log10(upstream_gwis_df[["robust_P_int"]])
-nlps2 <- -log10(downstream_gwis_df[["robust_P_int"]])
-
-# Function to trim points in crowded regions
-trim_points <- function(nlps) {
-  yfac <- factor(as.integer(nlps * 100) + 1L)
-  ygroup <- split(seq_along(yfac), yfac)
-  keep <- unlist(lapply(ygroup, function(x) if (length(x) > 300) sample(x, 300) else x), use.names = FALSE)
-  return(keep)
-}
-
-# Apply trimming function and select required columns
-top <- upstream_gwis_df[trim_points(nlps1), c("SNP", "CHR", "POS")] %>%
-  mutate(pvalue = nlps1[trim_points(nlps1)], Location = "Top")
-bottom <- downstream_gwis_df[trim_points(nlps2), c("SNP", "CHR", "POS")] %>%
-  mutate(pvalue = nlps2[trim_points(nlps2)], Location = "Bottom")
-
-# Combine and process data for plotting
-d_order <- rbind(top, bottom) %>%
-  mutate(POS = as.numeric(as.character(POS)),
-         CHR = factor(CHR, levels = c(as.character(1:22), "X", "Y")),
-         Color = as.character(CHR)) %>%
-  arrange(CHR, POS) %>%
-  mutate(pos_index = seq.int(n()),
-         x_coord = ave(POS, CHR, FUN = cumsum))
-
-# Calculate chromosome limits for plotting
-chr_limits <- d_order %>%
-  group_by(CHR) %>%
-  summarize(start_pos = min(x_coord), end_pos = max(x_coord)) %>%
-  mutate(mid_pos = (start_pos + end_pos) / 2) %>%
-  ungroup()
-
-# Plotting colors
-newcols <- c(rep(x = c("#AAAAAA", "#8A8A8A"), length.out = 22, each = 1), RColorBrewer::brewer.pal(3, "Dark2")[c(2, 3, 1)])
-names(newcols) <- c(as.character(1:22), "30", "31", "32")
-
-# Base plot with common aesthetics
-base_plot <- ggplot() +
-  scale_x_continuous(breaks = chr_limits$mid_pos, labels = chr_limits$CHR, expand = c(0, 0)) +
-  scale_colour_manual(values = newcols) +
-  theme(panel.grid = element_blank(), axis.ticks.x = element_blank())
-
-# Top plot
-p1 <- base_plot +
-  geom_point(data = filter(d_order, Location == "Top"), aes(x = x_coord, y = pvalue, color = Color), size = 0.75) +
-  scale_y_continuous(name = expression(-log[10](italic(p)[int]) - " Upstream"), limits = c(0, 15), breaks = seq(0, 15, 5)) +
-  theme(axis.title.x = element_blank(), axis.text.x = element_text(vjust = -1.5))
-
-# Bottom plot
-p2 <- base_plot +
-  geom_point(data = filter(d_order, Location == "Bottom"), aes(x = x_coord, y = pvalue, color = Color), size = 0.75) +
-  scale_y_reverse(name = expression(-log[10](italic(p)[int]) - " Downstream"), limits = c(15, 0), breaks = seq(0, 15, 5)) +
-  theme(axis.text.x = element_blank(), axis.title.x = element_blank())
-
-# Combine plots
-combined_plot <- (p1 + guides(color = FALSE)) / (p2 + guides(color = FALSE))
-print(combined_plot)
 ```
 
 ```{r load-gene-results}
@@ -699,7 +639,6 @@ gene_bonferroni <- 0.05 / length(unique(gene_summary_df$GENE))
 # Make a Miami plot -- credit to RaMWAS package (pruning unneeded points)
 # and hudson package (basis for Miami plot functionality)
 
-# data <- filter(data, data[[pval_col_1]] > 0, data[[pval_col_2]] > 0)
 nlps1 <- -log10(filter(gene_summary_df, pathway == "upstream")[["P"]])
 nlps2 <- -log10(filter(gene_summary_df, pathway == "downstream")[["P"]])
 
@@ -795,11 +734,7 @@ p2 <- ggplot(data=filter(d_order, Location == "Bottom"),
   scale_x_continuous(breaks=lims$av[c(1:16, 18, 20, 20, 22)], 
                      labels=lims$Color[c(1:16, 18, 20, 20, 22)], 
                      expand=c(0,0)) +
-  scale_colour_manual(name = "Color", values = newcols,
-                      # breaks=c(30, 31),
-                      # labels=c("Genome-wide significant joint test, no genome-wide significant marginal test",
-                      #          "Genome-wide significant interaction test")
-  ) +
+  scale_colour_manual(name = "Color", values = newcols) +
   scale_fill_manual(name = "Color", values = newcols) +
   ylab(expression(-log[10](p) - Interaction)) +
   theme(axis.text.x = element_blank(),
@@ -868,7 +803,7 @@ make_gene_summary_manhattan <- function(data,
   
   newcols <- setNames(
     c(rep(x = c("#AAAAAA", "#8A8A8A"), length.out = 22),
-      RColorBrewer::brewer.pal(3, "Dark2")),
+      RColorBrewer::brewer.pal(3, "Set1")),
     c(levels(factor(lims$CHR)), unique(mh_data$pathway))
   )
   
@@ -899,7 +834,7 @@ make_gene_summary_manhattan <- function(data,
 
 gene_bonferroni <- 0.05 / length(unique(gene_summary_df$GENE))
 
-make_gene_summary_manhattan(gene_summary_df)
+make_gene_summary_manhattan(mutate(gene_summary_df, pathway = str_to_title(pathway)))
 ```
 
 Bonferroni significance threshold for the above plot is `r gene_bonferroni`, based on correction for `r length(unique(gene_summary_df$GENE))` unique genes.
@@ -1025,6 +960,7 @@ sensitivity_res_tbl <- bind_rows(list(
          result = paste0(round(estimate, 3), " (", format(p.value, scientific = TRUE), ")")) %>%
   select(gene, snp, pathway, covar_set, result) %>%
   pivot_wider(names_from = "covar_set", values_from = "result") %>%
+  mutate(gene = if_else(gene == "MYRF", "MYRF (FADS locus)", gene)) %>%
   select(Gene = gene, Pathway = pathway, Variant = snp,
          Primary = primary,
          `Add E x gPC` = add_E_by_gPC, 
@@ -1033,19 +969,9 @@ sensitivity_res_tbl <- bind_rows(list(
 
 write_csv(sensitivity_res_tbl, "../output/manuscript/gene_sensitivity_res_df.csv")
 
-sensitivity_res_tbl
-```
-
-# Replication
-
-```{r wghs-replication}
-wghs_rep_df %>%
-  mutate(label = paste0(SYMBOL, " (", rsid, ")"),
-         sig = p_wghs < 0.05) %>%
-  filter(y == "LNCRP") %>%
-  ggplot(aes(x = beta_ukb, y = beta_wghs, color = sig)) +
-  geom_point() +
-  geom_abline(slope = 1, intercept = 0)
+sensitivity_res_tbl %>%
+  kable() %>%
+  kable_styling()
 ```
 
 # Vignettes
@@ -1176,12 +1102,19 @@ kable(sensitivity_e_res_df,
 ```
 
 ```{r fads1-viz}
-gene_fu_df %>%
+fads1_summary_plt <- ggdraw() + (
+  magick::image_read_pdf("../data/processed/manuscript/summary_figure.pdf", density = 300) %>%
+    magick::image_trim() %>%
+    draw_image()
+)
+
+fads1_strat_plt <- gene_fu_df %>%
   mutate(G = factor(round(G))) %>%
   filter(!is.na(G), !is.na(oily_fish), !is.na(Omega_3_pct)) %>%
   group_by(G, oily_fish_fct) %>%
   summarise(m = mean(Omega_3_pct),
-            se = sd(Omega_3_pct) / sqrt(n())) %>%
+            se = sd(Omega_3_pct) / sqrt(n()),
+            .groups = "drop") %>%
   mutate(l95 = m - 1.96 * se,
          u95 = m + 1.96 * se) %>%
   ggplot(aes(x = G, y = m, color = oily_fish_fct)) +
@@ -1191,68 +1124,65 @@ gene_fu_df %>%
   scale_color_discrete(name = "Oily fish intake") +
   labs(x = "Genotype", y = "Mean plasma N3FA% (95% CI)")
 
-# beta_vec <- all_maf_sumstats_df[["Beta_G-oily_fish"]]
-# ylims <- median(beta_vec, na.rm = TRUE) + c(-5, 5) * mad(beta_vec, na.rm = TRUE)
+fads1_summary_plt + fads1_strat_plt +
+  plot_layout(widths = c(2, 1)) +
+  plot_annotation(tag_levels = "a")
 
-int_effect_maf_plt <- all_maf_sumstats_df %>%
-  filter(adjustment == "unconditional") %>%
-  arrange(top_gwis) %>%
-  ggplot(aes(x = MAF, y = int_estimate)) +
-  geom_point(aes(color = top_gwis)) +
-  geom_errorbar(aes(color = top_gwis, ymin=l95, ymax=u95), width = 0) +
-  geom_hline(yintercept = 0, color="gray") +
-  scale_x_log10() +
-  scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
-                     breaks = c(TRUE),
-                     labels = c("Top variant from GWIS")) +
-  labs(x = "MAF", y = "Interaction effect estimate (95% CI)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
-        legend.position = "bottom", legend.title = element_blank(), 
-        legend.key = element_blank())
+# int_effect_maf_plt <- all_maf_sumstats_df %>%
+#   filter(adjustment == "unconditional") %>%
+#   arrange(top_gwis) %>%
+#   ggplot(aes(x = MAF, y = int_estimate)) +
+#   geom_point(aes(color = top_gwis)) +
+#   geom_errorbar(aes(color = top_gwis, ymin=l95, ymax=u95), width = 0) +
+#   geom_hline(yintercept = 0, color="gray") +
+#   scale_x_log10() +
+#   scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
+#                      breaks = c(TRUE),
+#                      labels = c("Top variant from GWIS")) +
+#   labs(x = "MAF", y = "Interaction effect estimate (95% CI)") +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
+#         legend.position = "bottom", legend.title = element_blank(), 
+#         legend.key = element_blank())
 
-int_effect_cond_plt <- all_maf_sumstats_df %>%
-  group_by(SNPID) %>%
-  filter(any(P_Value_Interaction < 0.05)) %>%
-  ungroup() %>%
-  mutate(int_estimate = `Beta_G-oily_fish`,
-         int_se = `SE_Beta_G-oily_fish`) %>%
-  select(SNPID, AF, adjustment, int_estimate, int_se) %>%
-  arrange(int_estimate) %>%
-  mutate(l95 = int_estimate - 1.96 * int_se,
-         u95 = int_estimate + 1.96 * int_se,
-         top_gwis = (SNPID == gsub("_.*", "", top_snp)),
-         MAF = pmin(AF, 1 - AF),
-         SNPID = factor(SNPID, levels = unique(SNPID[adjustment == "unconditional"]))) %>%
-  filter(!top_gwis) %>%
-  ggplot(aes(x = SNPID, y = int_estimate, color = adjustment)) +
-  geom_point(position = position_dodge(width = 0.1)) +
-  geom_errorbar(aes(ymin = l95, ymax = u95), width = 0, 
-                position = position_dodge(width = 0.1)) +
-  geom_hline(yintercept = 0, color = "gray") + 
-  labs(x = "", 
-       y = "Interaction effect (95% CI)") +
-  # coord_cartesian(ylim = ylims) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
-        legend.position = "bottom", legend.title = element_blank(), 
-        legend.key = element_blank())
+# int_effect_cond_plt <- all_maf_sumstats_df %>%
+#   group_by(SNPID) %>%
+#   filter(any(P_Value_Interaction < 0.05)) %>%
+#   ungroup() %>%
+#   mutate(int_estimate = `Beta_G-oily_fish`,
+#          int_se = `SE_Beta_G-oily_fish`) %>%
+#   select(SNPID, AF, adjustment, int_estimate, int_se) %>%
+#   arrange(int_estimate) %>%
+#   mutate(l95 = int_estimate - 1.96 * int_se,
+#          u95 = int_estimate + 1.96 * int_se,
+#          top_gwis = (SNPID == gsub("_.*", "", top_snp)),
+#          MAF = pmin(AF, 1 - AF),
+#          SNPID = factor(SNPID, levels = unique(SNPID[adjustment == "unconditional"]))) %>%
+#   filter(!top_gwis) %>%
+#   ggplot(aes(x = SNPID, y = int_estimate, color = adjustment)) +
+#   geom_point(position = position_dodge(width = 0.1)) +
+#   geom_errorbar(aes(ymin = l95, ymax = u95), width = 0, 
+#                 position = position_dodge(width = 0.1)) +
+#   geom_hline(yintercept = 0, color = "gray") + 
+#   labs(x = "", 
+#        y = "Interaction effect (95% CI)") +
+#   # coord_cartesian(ylim = ylims) +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
+#         legend.position = "bottom", legend.title = element_blank(), 
+#         legend.key = element_blank())
 
-int_p_cond_plt <- all_maf_sumstats_df %>%
-  mutate(int_nlp = -log10(P_Value_Interaction)) %>%
-  select(SNPID, SNPID, MAF, adjustment, int_nlp, top_gwis) %>%
-  pivot_wider(names_from = "adjustment", values_from = "int_nlp") %>%
-  filter(!top_gwis) %>%
-  ggplot(aes(x = unconditional, y = conditional, color = MAF)) +
-  geom_point() +
-  geom_abline(slope = 1, intercept = 0, color="gray") +
-  scale_color_continuous(trans = "log", breaks = c(0.001, 0.01, 0.1)) +
-  labs(x = "Interaction p-value (unconditional)", 
-       y = "Interaction p-value (conditional on top variant)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
-        legend.position = "bottom")
-
-print(int_effect_maf_plt)
-print(int_effect_cond_plt)
-print(int_p_cond_plt)
+# int_p_cond_plt <- all_maf_sumstats_df %>%
+#   mutate(int_nlp = -log10(P_Value_Interaction)) %>%
+#   select(SNPID, SNPID, MAF, adjustment, int_nlp, top_gwis) %>%
+#   pivot_wider(names_from = "adjustment", values_from = "int_nlp") %>%
+#   filter(!top_gwis) %>%
+#   ggplot(aes(x = unconditional, y = conditional, color = MAF)) +
+#   geom_point() +
+#   geom_abline(slope = 1, intercept = 0, color="gray") +
+#   scale_color_continuous(trans = "log", breaks = c(0.001, 0.01, 0.1)) +
+#   labs(x = "Interaction p-value (unconditional)", 
+#        y = "Interaction p-value (conditional on top variant)") +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
+#         legend.position = "bottom")
 ```
 
 ```{r fads1-diet-corr}
@@ -1279,202 +1209,6 @@ hscrp_pn3fa_lm_str <- paste0("hscrp_log ~ Omega_3_pct")
 hscrp_pn3fa_lm <- lm(as.formula(hscrp_pn3fa_lm_str), data = gene_fu_df)
 print("pN3FA -> log(hsCRP) R-squared:")
 summary(hscrp_pn3fa_lm)$r.squared
-```
-
-## Main effects
-
-### FADS1
-
-```{r fads1-main-effects, eval=F}
-fads1_cv_df <- all_maf_sumstats_df %>%
-  filter(adjustment == "unconditional",
-         MAF >= 0.01) %>%
-  fads1_cv_marg_gxe_corr <- with(fads1_cv_df, cor(Beta_Marginal, `Beta_G-oily_fish`))
-
-fads1_cv_df %>%
-  ggplot(aes(x = Beta_Marginal, y = `Beta_G-oily_fish`)) +
-  geom_point() + 
-  geom_smooth(method = "lm", se = FALSE) +
-  labs(title = paste0("Pearson correlation between marginal and GxE effects: ", 
-                      round(fads1_cv_marg_gxe_corr, 2)))
-
-# fads1_rv_df %>%
-#   filter(P_Value_Marginal < 0.05,
-#          annot != "ncRNA_exonic",
-#          annot != "intronic") %>%
-#   ggplot(aes(x = Beta_Marginal, y = `Beta_G-oily_fish`,
-#              color = annot, group = annot)) +
-#   geom_point() + 
-#   geom_smooth(method = "lm", se = FALSE)
-
-# fads1_rv_df %>%
-#   filter(P_Value_Marginal < 0.05, #P_Value_Interaction < 0.05,
-#          annot != "ncRNA_exonic") %>%
-#   mutate(statistic_marg = Beta_Marginal / SE_Beta_Marginal,
-#          statistic_gxe = `Beta_G-oily_fish` / `SE_Beta_G-oily_fish`) %>%
-#   ggplot(aes(x = statistic_marg, y = `statistic_gxe`, color = MAF)) + 
-#              # color = annot, group = annot)) +
-#   geom_point() + 
-#   geom_smooth(method = "lm", se = FALSE)
-
-fads1_rv_df <- all_maf_sumstats_df %>%
-  filter(adjustment == "conditional",
-         MAF < 0.01, MAF > 0.001)
-
-fads1_rv_df %>%
-  mutate(l95 = Beta_Marginal - 1.96 * SE_Beta_Marginal,
-         u95 = Beta_Marginal + 1.96 * SE_Beta_Marginal) %>%
-  ggplot(aes(x = MAF, y = Beta_Marginal)) +
-  geom_point() +
-  geom_errorbar(aes(ymin = l95, ymax= u95), width = 0) +
-  geom_hline(yintercept = 0, color = "gray") +
-  scale_x_log10()
-
-# fads1_rv_df %>%
-#   mutate(beta_sign = factor(sign(Beta_Marginal))) %>%
-#   ggplot(aes(x = annot, y = Beta_Marginal, fill = beta_sign)) +
-#   geom_boxplot()
-```
-
-### FADS2
-
-```{r fads2-main-effects, eval=F}
-all_maf_uncond_sumstats_df <- read_tsv("../data/processed/gene_followup/oily_fish_Omega_3_pct_fads2_regressions")
-all_maf_cond_sumstats_df <- read_tsv("../data/processed/gene_followup/oily_fish_Omega_3_pct_fads2_regressions_cond")
-variant_annot_df <- read_tsv(
-  paste0("../data/processed/annovar/fads2_variants.variant_function"),
-  col_names = c("annot", "gene", "chr", "start", "end", "REF", "ALT", "SNPID")
-) %>%
-  select(SNPID, annot)
-all_maf_sumstats_df <- bind_rows(list(
-  unconditional = all_maf_uncond_sumstats_df, 
-  conditional = all_maf_cond_sumstats_df
-), .id = "adjustment") %>%
-  filter(SE_Beta_G < (100 * median(SE_Beta_G))) %>%
-  mutate(int_estimate = `Beta_G-oily_fish`,
-         int_se = `SE_Beta_G-oily_fish`, 
-         l95 = int_estimate - 1.96 * int_se,
-         u95 = int_estimate + 1.96 * int_se,
-         top_gwis = (SNPID == gsub("_.*", "", top_snp)),
-         MAF = pmin(AF, 1 - AF)) %>%
-  left_join(variant_annot_df, by = "SNPID") %>%
-  mutate(annot = ifelse(is.na(annot), "unannotated", annot))
-
-fads2_cv_df <- all_maf_sumstats_df %>%
-  filter(adjustment == "unconditional",
-         MAF >= 0.01)
-fads2_cv_marg_gxe_corr <- with(fads2_cv_df, cor(Beta_Marginal, `Beta_G-oily_fish`))
-
-fads2_cv_df %>%
-  ggplot(aes(x = Beta_Marginal, y = `Beta_G-oily_fish`)) +
-  geom_point() + 
-  geom_smooth(method = "lm", se = FALSE) +
-  labs(title = paste0("Pearson correlation between marginal and GxE effects: ", 
-                      round(fads2_cv_marg_gxe_corr, 2)))
-
-fads2_rv_df <- all_maf_sumstats_df %>%
-  filter(adjustment == "conditional",
-         MAF < 0.01, MAF > 0.001)
-
-fads2_rv_df %>%
-  mutate(l95 = Beta_Marginal - 1.96 * SE_Beta_Marginal,
-         u95 = Beta_Marginal + 1.96 * SE_Beta_Marginal) %>%
-  ggplot(aes(x = MAF, y = Beta_Marginal)) +
-  geom_point() +
-  geom_errorbar(aes(ymin = l95, ymax= u95), width = 0) +
-  geom_hline(yintercept = 0, color = "gray") +
-  scale_x_log10()
-
-fads2_rv_df %>%
-  filter(MAF > 0.001) %>%
-  ggplot(aes(x = MAF, y = int_estimate)) +
-  geom_point(aes(color = top_gwis)) +
-  geom_errorbar(aes(color = top_gwis, ymin=l95, ymax=u95), width = 0) +
-  geom_hline(yintercept = 0, color="gray") +
-  scale_x_log10() +
-  scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
-                     breaks = c(TRUE),
-                     labels = c("Top variant from GWIS")) +
-  labs(x = "MAF", y = "Interaction effect estimate (95% CI)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
-        legend.position = "bottom", legend.title = element_blank(), 
-        legend.key = element_blank())
-
-top_cond_snp_df <- read_tsv(paste0("../data/processed/gene_followup/oily_fish_Omega_3_pct_fads2_top_cond_snp.raw")) %>%
-  select(id = IID, last_col()) %>%
-  mutate(id = as.character(id))
-top_cond_snp <- names(top_cond_snp_df)[2]
-gene_fu_df <- phenos %>%
-  inner_join(top_cond_snp_df, by = "id") %>%
-  mutate(G = !! sym(top_cond_snp))
-gene_fu_df %>%
-  mutate(G = factor(round(G))) %>%
-  filter(!is.na(G), !is.na(oily_fish), !is.na(Omega_3_pct)) %>%
-  group_by(G, oily_fish_fct) %>%
-  summarise(m = mean(Omega_3_pct),
-            se = sd(Omega_3_pct) / sqrt(n())) %>%
-  mutate(l95 = m - 1.96 * se,
-         u95 = m + 1.96 * se) %>%
-  ggplot(aes(x = G, y = m, color = oily_fish_fct)) +
-  geom_point(position = position_dodge(width = 0.2)) +
-  geom_errorbar(aes(ymin = l95, ymax = u95), width = 0.2,
-                position = position_dodge(width = 0.2)) +
-  scale_color_discrete(name = "Oily fish intake") +
-  labs(x = "Genotype", y = "Mean plasma N3FA% (95% CI)")
-```
-
-```{r ggbio-testing, eval=F}
-library(ggbio)
-library(Homo.sapiens)
-
-data(genesymbol,package = "biovizBase")
-wh <- genesymbol[c("C11orf10", "FADS1", "FADS2", "FEN1", "C11orf9")]
-wh <- range(wh, ignore.strand = TRUE)
-fads_region_base_plt <- autoplot(Homo.sapiens, which = wh)
-fads_region_base_plt +
-  scale_x_continuous(name = "Position on chr11 (kb)", labels = ~ . / 1000)
-
-wh <- genesymbol["FADS2"]
-wh <- range(wh, ignore.strand = TRUE)
-fads2_base_plt <- autoplot(Homo.sapiens, which = wh)
-
-fads2_effects_plt <- fads2_rv_df %>%
-  filter(MAF > 0.001) %>%
-  ggplot(aes(x = POS, y = `Beta_G-oily_fish`)) +
-  geom_point() +
-  # geom_point(aes(color = top_gwis)) +
-  geom_errorbar(aes(ymin=l95, ymax=u95), width = 0) +
-  geom_hline(yintercept = 0, color="gray") +
-  # scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
-  #                    breaks = c(TRUE),
-  #                    labels = c("Top variant from GWIS")) +
-  labs(x = "MAF", y = "GxE estimate (95% CI)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
-        legend.position = "bottom", legend.title = element_blank(), 
-        legend.key = element_blank())
-
-fads2_marg_effects_plt <- fads2_rv_df %>%
-  mutate(
-    # Beta_Marginal = abs(Beta_Marginal),
-    l95 = Beta_Marginal - 1.96 * SE_Beta_Marginal,
-    u95 = Beta_Marginal + 1.96 * SE_Beta_Marginal) %>%
-  ggplot(aes(x = POS, y = Beta_Marginal)) +
-  geom_point() +
-  geom_errorbar(aes(ymin=l95, ymax=u95), width = 0) +
-  geom_smooth() +
-  geom_hline(yintercept = 0, color="gray") +
-  # scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
-  #                    breaks = c(TRUE),
-  #                    labels = c("Top variant from GWIS")) +
-  labs(x = "MAF", y = "G marginal estimate (95% CI)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
-        legend.position = "bottom", legend.title = element_blank(), 
-        legend.key = element_blank())
-
-tks <- tracks(`Gene model` = fads2_base_plt, 
-              # `FADS2 marginal effects` = fads2_marg_effects_plt,
-              `FADS2 interaction effects` = fads2_effects_plt)
-tks
 ```
 
 ## Power calculations
@@ -1588,432 +1322,7 @@ targeted_sim_res_df <- expand_grid(
 ```
 
 ```{r plot-power-sims}
-targeted_sim_res_df
-
-# targeted_sim_res_df %>%
-#   mutate(across(c(pv_gxe_m), ~ factor(.x)),
-#          approach = factor(approach,
-#                            levels = c("std", "med"),
-#                            labels = c("Standard", "Upstream"))) %>%
-#   rename(`PV (GxE -> M)` = pv_gxe_m) %>%
-#   ggplot(aes(x = pv_m_y, y = pwr, group = approach, color = approach)) +
-#   geom_point() +
-#   geom_line() +
-#   scale_color_discrete(name = "Approach") + 
-#   facet_wrap(vars(`PV (GxE -> M)`), ncol = 1, labeller = label_both) +
-#   labs(x = "Proportion of variance in Y explained by M",
-#        y = "Statistical power")
-```
-
-## *SLC26A4*
-
-```{r collect-slc26a4-data, eval=F}
-gwis_sumstats_df <- read_tsv(paste0(
-  "../data/processed/gene_followup/Omega_3_pct_hscrp_log_slc26a4_subset"
-))
-
-top_snp_df <- read_tsv(paste0("../data/processed/gene_followup/Omega_3_pct_hscrp_log_slc26a4_top_snp.raw")) %>%
-  select(id = IID, last_col()) %>%
-  mutate(id = as.character(id))
-top_snp <- names(top_snp_df)[2]
-gene_fu_df <- phenos %>%
-  inner_join(top_snp_df, by = "id") %>%
-  mutate(G = !! sym(top_snp))
-
-gene_fu_df %>%
-  mutate(G = factor(round(G))) %>%
-  filter(!is.na(G), !is.na(oily_fish), !is.na(Omega_3_pct)) %>%
-  group_by(G, oily_fish) %>%
-  summarise(m = mean(Omega_3_pct),
-            se = sd(Omega_3_pct) / sqrt(n())) %>%
-  mutate(l95 = m - 1.96 * se,
-         u95 = m + 1.96 * se) %>%
-  ggplot(aes(x = G, y = m, color = oily_fish)) +
-  geom_point(position = position_dodge(width = 0.2)) +
-  geom_errorbar(aes(ymin = l95, ymax = u95), width = 0.2,
-                position = position_dodge(width = 0.2)) +
-  labs(x = "Genotype", y = "Mean of Y (95% CI)")
-
-sensitivity_covar_list <- list(
-  primary = base_covars,
-  add_E_by_gPC = c(base_covars, paste0("oily_fish * gPC", 1:10)),
-  add_G_by_Cov = paste0("g * ", base_covars),
-  add_BMI = c(base_covars, "bmi")
-)
-sensitivity_covar_res_df <- tibble(covar_set = names(sensitivity_covar_list)) %>%
-  rowwise() %>%
-  mutate(model_res = list(run_gxe(top_snp, "oily_fish", "Omega_3_pct",
-                                  sensitivity_covar_list[[covar_set]], 
-                                  gene_fu_df, std = TRUE))) %>%
-  unnest(model_res) %>%
-  mutate(across(estimate:p.value, ~ signif(., 3))) %>%
-  select(`Covariate set` = covar_set, `GxE estimate` = estimate, P = p.value)
-sensitivity_covar_res_df %>%
-  mutate(P = format_p(P)) %>%
-  kable(caption = "Sensitivity analyses: choice of covariates") %>%
-  kable_styling(full_width = FALSE)
-
-sensitivity_e_list <- list(
-  `Oily fish` = "oily_fish",
-  `Non-oily fish` = "nonoily_fish",
-  `Total N3FA from 24HR` = "N3FA",
-  `Fish oil supplementation` = "fish_oil_touchscreen"
-)
-sensitivity_e_res_df <- tibble(e_test = names(sensitivity_e_list)) %>%
-  rowwise() %>%
-  mutate(model_res = list(run_gxe(top_snp, sensitivity_e_list[[e_test]], 
-                                  "Omega_3_pct",
-                                  base_covars, 
-                                  gene_fu_df, std = TRUE))) %>%
-  unnest(model_res) %>%
-  mutate(across(estimate:p.value, ~ signif(., 3))) %>%
-  select(`Exposure` = e_test, `GxE estimate` = estimate, P = p.value)
-sensitivity_e_res_df %>%
-  mutate(P = format_p(P)) %>%
-  kable(caption = "Sensitivity analyses: alternate exposures") %>%
-  kable_styling(full_width = FALSE)
-
-all_maf_uncond_sumstats_df <- read_tsv("../data/processed/gene_followup/Omega_3_pct_hscrp_log_slc26a4_regressions")
-all_maf_cond_sumstats_df <- read_tsv("../data/processed/gene_followup/Omega_3_pct_hscrp_log_slc26a4_regressions_cond")
-all_maf_sumstats_df <- bind_rows(list(
-  unconditional = all_maf_uncond_sumstats_df, 
-  conditional = all_maf_cond_sumstats_df
-), .id = "adjustment") %>%
-  filter(SE_Beta_G < (100 * median(SE_Beta_G))) %>%
-  mutate(int_estimate = `Beta_G-oily_fish`,
-         int_se = `SE_Beta_G-oily_fish`, 
-         l95 = int_estimate - 1.96 * int_se,
-         u95 = int_estimate + 1.96 * int_se,
-         top_gwis = (SNPID == gsub("_.*", "", top_snp)),
-         MAF = pmin(AF, 1 - AF))
-
-beta_vec <- all_maf_sumstats_df[["Beta_G-oily_fish"]]
-ylims <- median(beta_vec, na.rm = TRUE) + c(-5, 5) * mad(beta_vec, na.rm = TRUE)
-
-int_effect_maf_plt <- all_maf_sumstats_df %>%
-  filter(adjustment == "unconditional") %>%
-  arrange(top_gwis) %>%
-  ggplot(aes(x = MAF, y = int_estimate)) +
-  geom_point(aes(color = top_gwis)) +
-  geom_errorbar(aes(color = top_gwis, ymin=l95, ymax=u95), width = 0) +
-  geom_hline(yintercept = 0, color="gray") +
-  scale_x_log10() +
-  scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
-                     breaks = c(TRUE),
-                     labels = c("Top variant from GWIS")) +
-  labs(x = "MAF", y = "Interaction effect estimate (95% CI)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
-        legend.position = "bottom", legend.title = element_blank(), 
-        legend.key = element_blank())
-
-int_effect_cond_plt <- all_maf_sumstats_df %>%
-  group_by(SNPID) %>%
-  filter(any(P_Value_Interaction < 0.05)) %>%
-  ungroup() %>%
-  mutate(int_estimate = `Beta_G-oily_fish`,
-         int_se = `SE_Beta_G-oily_fish`) %>%
-  select(SNPID, AF, adjustment, int_estimate, int_se) %>%
-  arrange(int_estimate) %>%
-  mutate(l95 = int_estimate - 1.96 * int_se,
-         u95 = int_estimate + 1.96 * int_se,
-         top_gwis = (SNPID == gsub("_.*", "", top_snp)),
-         MAF = pmin(AF, 1 - AF),
-         SNPID = factor(SNPID, levels = unique(SNPID[adjustment == "unconditional"]))) %>%
-  filter(!top_gwis) %>%
-  ggplot(aes(x = SNPID, y = int_estimate, color = adjustment)) +
-  geom_point(position = position_dodge(width = 0.1)) +
-  geom_errorbar(aes(ymin = l95, ymax = u95), width = 0, 
-                position = position_dodge(width = 0.1)) +
-  geom_hline(yintercept = 0, color = "gray") + 
-  labs(x = "", 
-       y = "Interaction effect (95% CI)") +
-  # coord_cartesian(ylim = ylims) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
-        legend.position = "bottom", legend.title = element_blank(), 
-        legend.key = element_blank())
-
-int_p_cond_plt <- all_maf_sumstats_df %>%
-  mutate(int_nlp = -log10(P_Value_Interaction)) %>%
-  select(SNPID, SNPID, MAF, adjustment, int_nlp, top_gwis) %>%
-  pivot_wider(names_from = "adjustment", values_from = "int_nlp") %>%
-  filter(!top_gwis) %>%
-  ggplot(aes(x = unconditional, y = conditional, color = MAF)) +
-  geom_point() +
-  geom_abline(slope = 1, intercept = 0, color="gray") +
-  scale_color_continuous(trans = "log", breaks = c(0.001, 0.01, 0.1)) +
-  labs(x = "Interaction p-value (unconditional)", 
-       y = "Interaction p-value (conditional on top variant)") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 0.9),
-        legend.position = "bottom")
-
-print(int_effect_maf_plt)
-print(int_effect_cond_plt)
-print(int_p_cond_plt)
-
-beta_int_col <- paste0("Beta_G-", e_regression)
-top_cond_sumstats_df <- all_maf_cond_sumstats_df %>%
-  filter(SE_Beta_G < (100 * median(SE_Beta_G))) %>%
-  # arrange(desc(abs(!! sym(beta_int_col)))) %>%
-  arrange(P_Value_Interaction) %>%
-  select(SNPID, CHR, POS, Effect_Allele, 
-         {{beta_int_col}}, P_Value_Interaction, P_Value_Marginal) %>%
-  head()
-print("Top variants in conditional analysis")
-print(top_cond_sumstats_df)
-
-top_cond_snp_df <- read_tsv(paste0("../data/processed/gene_followup/", 
-                                   e, "_", y, "_", gene, "_top_cond_snp.raw")) %>%
-  select(id = IID, last_col()) %>%
-  mutate(id = as.character(id))
-top_cond_snp <- names(top_cond_snp_df)[snp_idx + 1]
-regression_df <- inner_join(phenos, top_cond_snp_df, by = "id")
-cond_double_strat_plt <- make_double_strat_plot(top_cond_snp, e_regression, y, regression_df,
-                                                "Stratified interaction plot for top conditional rare SNP")
-cond_g_strat_plt <- make_g_strat_plot(top_cond_snp, e_regression, y, regression_df,
-                                      "Stratified interaction plot for top conditional rare SNP")
-print(cond_double_strat_plt + cond_g_strat_plt)
-```
-
-
-# AHA E|L outputs
-
-```{r aha-1, fig.asp=1.2, fig.width=3, eval=F}
-std_med_res_df <- readRDS("../data/processed/manuscript/std_med_res_df.rds") %>%
-  mutate(tau.ci.lower = map_dbl(list(med_obj), \(x) x$tau.ci[1]),
-         tau.ci.upper = map_dbl(list(med_obj), \(x) x$tau.ci[2]),
-         d.ci.lower = map_dbl(list(med_obj), \(x) x$d.avg.ci[1]),
-         d.ci.upper = map_dbl(list(med_obj), \(x) x$d.avg.ci[2]),
-         z.ci.lower = map_dbl(list(med_obj), \(x) x$z.avg.ci[1]),
-         z.ci.upper = map_dbl(list(med_obj), \(x) x$z.avg.ci[2]),
-         d.coef = d.avg, z.coef = z.avg)
-
-main_med_plt <- std_med_res_df %>%
-  filter(e == "dn3fa", m == "Omega_3_pct", y == "hscrp_log") %>%
-  select(contains("coef"), contains("ci")) %>%
-  pivot_longer(everything(), names_to = c("estimate", "quantity"), 
-               names_pattern = "([a-z]+)\\.(.*)", 
-               values_to = "value") %>%
-  pivot_wider(names_from = "quantity", values_from = "value") %>%
-  mutate(estimate = factor(estimate, levels = c("tau", "d", "z"),
-                           labels = c("Total effect", "Indirect (mediated) effect", "Direct effect"))) %>%
-  ggplot(aes(x = estimate, y = coef)) +
-  geom_point() +
-  geom_errorbar(aes(ymin = ci.lower, ymax = ci.upper), width = 0) +
-  geom_hline(yintercept = 0, color = "gray") +
-  labs(y = "Estimate (dN3FA - pN3FA - hsCRP)") +
-  theme(axis.title.x = element_blank(),
-        axis.text.x = element_text(angle = 20, hjust = 0.9))
-
-main_med_plt
-```
-
-```{r aha-2, fig.asp=0.6, eval=F}
-nlps1 <- -log10(upstream_gwis_df[["robust_P_int"]])
-nlps2 <- -log10(downstream_gwis_df[["robust_P_int"]])
-
-yfac = as.integer(nlps1 * 100) + 1L
-yorder = sort.list(yfac)
-levels(yfac) = as.character(seq_len(max(yfac)))
-class(yfac) = "factor"
-ygroup = split(seq_along(yfac), yfac)
-for (i in seq_along(ygroup)) {
-  if (length(ygroup[[i]]) > 300) {
-    ygroup[[i]] = sample(ygroup[[i]], size=300, replace=FALSE)
-  }
-}
-keep1 = unlist(ygroup, use.names=FALSE)
-yfac = as.integer(nlps2 * 100) + 1L
-yorder = sort.list(yfac)
-levels(yfac) = as.character(seq_len(max(yfac)))
-class(yfac) = "factor"
-ygroup = split(seq_along(yfac), yfac)
-for (i in seq_along(ygroup)) {
-  if (length(ygroup[[i]]) > 300) {
-    ygroup[[i]] = sample(ygroup[[i]], size=300, replace=FALSE)
-  }
-}
-keep2 = unlist(ygroup, use.names=FALSE)
-
-top <- cbind(select(upstream_gwis_df, SNP, CHR, POS), pvalue=nlps1)[keep1, ]
-bottom=cbind(select(downstream_gwis_df, SNP, CHR, POS), pvalue=nlps2)[keep2, ]
-
-topn <- names(top)
-bottomn <- names(bottom)
-top$Location <- "Top"
-bottom$Location <- "Bottom"
-d <- rbind(top, bottom)
-d$POS <- as.numeric(as.character(d$POS))
-d$CHR <- factor(d$CHR, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "X", "Y"))
-d_order <- d[order(d$CHR, d$POS), ]
-d_order$pos_index <- seq.int(nrow(d_order))
-chr_lengths <- sapply(1:22, function(chr) max(d[d$CHR == chr, "POS"]))
-chr_start_pos <- cumsum(chr_lengths) - chr_lengths
-d_order$x_coord <- chr_start_pos[d_order$CHR] + d_order$POS
-d_order_sub <- d_order[, c("SNP", "CHR", "POS", "pvalue", "pos_index", "x_coord")]
-maxRows <- by(d_order_sub, d_order_sub$CHR, function(x) x[which.max(x$x_coord),])
-minRows <- by(d_order_sub, d_order_sub$CHR, function(x) x[which.min(x$x_coord),])
-milimits <- do.call(rbind, minRows)
-malimits <- do.call(rbind, maxRows)
-lims <- merge(milimits, malimits, by="CHR")
-names(lims) <- c("Color", 
-                 "snpx", "posx", "px", "posidxx", "xcoordmin",
-                 "snpy", "posy", "py", "posidxy", "xcoordmax")
-lims$av <- (lims$xcoordmin + lims$xcoordmax)/2
-lims <- lims[order(lims$Color),]
-
-# gw_int_snps <- whr_ss$RSID[whr_ss$P_Value_Interaction < 5e-8]
-# gw_joint_noMarg_snps <- whr_ss$RSID[whr_ss$P_Value_Joint < 5e-8 &
-#                                     whr_ss$P_Value_Main > 5e-8]
-# d_order$Color <- case_when(
-#   d_order$SNP %in% int_marg_snps ~ "30",
-#   d_order$SNP %in% int_nomarg_snps ~ "31",
-#   d_order$SNP %in% joint_nomarg_snps ~ "32",
-#   TRUE ~ as.character(d_order$CHR)
-# )
-d_order$Color <- as.character(d_order$CHR)
-newcols <-c(rep(x=c("#AAAAAA", "#8A8A8A"), length.out=22, each=1),  # Gray/dark gray for alternating chromosomes
-            RColorBrewer::brewer.pal(3, "Dark2")[c(2, 3, 1)])
-names(newcols) <-c(levels(factor(lims$Color)), "30", "31", "32")
-d_order <- arrange(d_order, as.integer(Color), desc(pvalue)) %>%
-  distinct(SNP, Location, .keep_all=T)
-
-# TOP PLOT
-p1 <- ggplot() +
-  geom_point(data=d_order[d_order$Location=="Top", ], 
-             aes(x=x_coord, y=pvalue, color=factor(Color)), 
-             size=0.75, alpha=1) +
-  geom_hline(yintercept=-log10(5e-8), linetype="dashed", color="black") + 
-  scale_x_continuous(breaks=lims$av[c(1:16, 18, 20, 20, 22)], 
-                     labels=lims$Color[c(1:16, 18, 20, 20, 22)], 
-                     expand=c(0,0)) +
-  scale_y_continuous(limits=c(0, 12), breaks = seq(0, 10, 5), expand = c(0, 0),
-                     name=expression(-log[10](italic(p)) - Upstream)) +
-  scale_colour_manual(name = "Color", values = newcols) +
-  scale_fill_manual(name = "Color", values = newcols) +
-  theme(axis.title.x=element_blank(),
-        axis.text.x = element_text(vjust = -1.5),
-        panel.grid.minor = element_blank(),
-        panel.grid.major.x = element_blank())
-
-# BOTTOM PLOT
-p2 <- ggplot(data=filter(d_order, Location == "Bottom"),
-             aes(x=x_coord, y=pvalue, color=factor(Color))) +
-  geom_point(size=0.75, alpha=1) +
-  geom_hline(yintercept=-log10(5e-8), linetype="dashed", color="black") + 
-  scale_x_continuous(breaks=lims$av[c(1:16, 18, 20, 20, 22)], 
-                     labels=lims$Color[c(1:16, 18, 20, 20, 22)], 
-                     expand=c(0,0)) +
-  scale_colour_manual(name = "Color", values = newcols,
-                      # breaks=c(30, 31),
-                      # labels=c("Genome-wide significant joint test, no genome-wide significant marginal test",
-                      #          "Genome-wide significant interaction test")
-  ) +
-  scale_fill_manual(name = "Color", values = newcols) +
-  ylab(expression(-log[10](p) - Interaction)) +
-  theme(axis.text.x = element_blank(),
-        axis.title.x = element_blank(),
-        panel.grid.minor = element_blank(),
-        panel.grid.major.x = element_blank()) +
-  scale_y_reverse(limits=c(12,0), breaks = seq(0, 10, 5), expand = c(0, 0),
-                  name=expression(-log[10](italic(p)) - Downstream))
-
-# color_legend <- get_legend(
-#   p2 + 
-#     theme(
-#       legend.title=element_blank(), 
-#       legend.background=element_rect(size=rel(0.5)),
-#       legend.key.size=unit(0.1, "lines"),
-#       legend.text=element_text(size=10)
-#     ) + 
-#     guides(color=guide_legend(override.aes=list(size=2.5)))
-# )
-
-(p1 + guides(color=F)) /  
-  (p2 + guides(color=F))
-```
-
-```{r aha-3, fig.asp=1, fig.width=5, eval=F}
-make_gene_summary_manhattan <- function(data, 
-                                        pval_col = "P", snp_col = "SYMBOL", 
-                                        chr_col = "CHR", pos_col = "START", 
-                                        threshold = gene_bonferroni, 
-                                        ylims = NULL, main = "",
-                                        add_labels = TRUE) {
-  
-  mh_data <- data %>%
-    dplyr::rename(all_of(c(SNP = snp_col, CHR = chr_col, POS = pos_col, P = pval_col))) %>%
-    filter(!is.na(P)) %>%
-    mutate(P = as.numeric(P),
-           P = ifelse(P == 0, min(1e-300, min(P[P != 0], na.rm = TRUE)), P),  # Remove P = 0
-           nlp = -log10(P))
-  
-  # Trim points in crowded regions (credit to RaMWAS package for code snippet)
-  yfac = as.integer(mh_data$nlp * 100) + 1L
-  yorder = sort.list(yfac)
-  yfac <- factor(yfac, levels = as.character(seq_len(max(yfac))))
-  ygroup <- split(seq_along(yfac), yfac)
-  for (i in seq_along(ygroup)) {
-    if (length(ygroup[[i]]) > 300) {
-      ygroup[[i]] <- sample(ygroup[[i]], size = 300, replace = FALSE)
-    }
-  }
-  keep <- unlist(ygroup, use.names = FALSE)
-  
-  mh_data <- mh_data %>%
-    select(SNP, CHR, POS, nlp, pathway, fdr_sig) %>%
-    dplyr::slice(keep) %>%
-    mutate(POS = as.numeric(as.character(POS)),
-           CHR = factor(CHR, levels = c(1:22, "X"))) %>%
-    arrange(CHR, POS) %>%
-    mutate(pos_idx = seq(1, nrow(.)))
-  
-  suppressWarnings(chr_lengths <- sapply(c(1:22, "X"), function(chr) {
-    with(mh_data, max(POS[CHR == chr], na.rm = TRUE))
-  }))
-  chr_lengths <- ifelse(is.infinite(chr_lengths), 0, chr_lengths)
-  chr_start_pos <- cumsum(chr_lengths) - chr_lengths
-  
-  mh_data <- mh_data %>%
-    mutate(x_coord = chr_start_pos[CHR] + POS,
-           color = ifelse(fdr_sig, pathway, CHR),
-    )
-  
-  lims <- mh_data %>%
-    group_by(CHR) %>%
-    summarise(avg_coord = (min(x_coord) + max(x_coord)) / 2)
-  
-  newcols <- setNames(
-    c(rep(x = c("#AAAAAA", "#8A8A8A"), length.out = 22),
-      RColorBrewer::brewer.pal(3, "Dark2")),
-    c(levels(factor(lims$CHR)), unique(mh_data$pathway))
-  )
-  
-  mh_plt <- ggplot() +
-    geom_point(data = mh_data, 
-               aes(x = x_coord, y = nlp, color = factor(color)), 
-               size = 0.75, alpha = 1) +
-    geom_hline(yintercept = -log10(threshold), linetype = "dashed", color = "gray") + 
-    scale_x_continuous(breaks = lims$avg_coord[c(1:16, 18, 20, 20, 22, 23)], 
-                       labels = c(1:16, 18, 20, 20, 22, "X"), 
-                       expand = c(0,0)) +
-    scale_y_continuous(name = expression(-log[10](italic(p)[int]))) +
-    scale_colour_manual(values = newcols, breaks = unique(mh_data$pathway),
-                        name = "Sub-pathway") +
-    scale_fill_manual(name = "Color", values = newcols) +
-    labs(title = main) +
-    theme(axis.title.x = element_blank(),
-          axis.text.x = element_text(vjust = -1.5),
-          panel.grid.minor = element_blank(),
-          panel.grid.major.x = element_blank())
-  if (!is.null(ylims)) mh_plt <- mh_plt + coord_cartesian(ylim = ylims)
-  if (add_labels) mh_plt <- mh_plt +
-    ggrepel::geom_text_repel(data = filter(mh_data, fdr_sig),
-                             aes(x = x_coord, y = nlp, label = SNP))
-  
-  mh_plt
-}
-
-gene_bonferroni <- 0.05 / length(unique(gene_summary_df$GENE))
-
-make_gene_summary_manhattan(gene_summary_df)
+targeted_sim_res_df %>%
+  kable(caption = "Targeted post hoc power simulation results (upstream)") %>%
+  kable_styling()
 ```

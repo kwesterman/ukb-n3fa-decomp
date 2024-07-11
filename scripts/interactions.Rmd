@@ -23,12 +23,6 @@ gwis_res_df <- expand_grid(
   rowwise() %>%
   mutate(nom_res = list(read_tsv(paste0("../data/processed/gwis/", e, "_", y, "_merged_nom"))))
 
-# fish_crp_gwis <- read_tsv("../data/processed/gwis/oily_fish_hscrp_log_merged_nom")
-# fish_n3_gwis <- read_tsv("../data/processed/gwis/oily_fish_Omega_3_pct_merged_nom")
-# n3_crp_gwis <- read_tsv("../data/processed/gwis/Omega_3_pct_hscrp_log_merged_nom")
-# fish_oil_crp_gwis <- read_tsv("../data/processed/gwis/fish_oil_hscrp_log_merged_nom")
-# fish_oil_n3_gwis <- read_tsv("../data/processed/gwis/fish_oil_Omega_3_pct_merged_nom")
-
 gene_res_df <- expand_grid(
   e = c("dn3fa", "oily_fish", "fish_oil"),
   y = c("Omega_3_pct", "hscrp_log")
@@ -36,17 +30,6 @@ gene_res_df <- expand_grid(
   bind_rows(tibble(e = "Omega_3_pct", y = "hscrp_log")) %>%
   rowwise() %>%
   mutate(res = list(read_tsv(paste0("../data/processed/magma/", e, "_", y, ".genes.out"))))
-
-# fish_crp_genes <- read_table("../data/processed/magma/oily_fish_hscrp_log.genes.out") %>%
-#   arrange(P)
-# fish_n3_genes <- read_table("../data/processed/magma/oily_fish_Omega_3_pct.genes.out") %>%
-#   arrange(P)
-# n3_crp_genes <- read_table("../data/processed/magma/Omega_3_pct_hscrp_log.genes.out") %>%
-#   arrange(P)
-# fish_oil_crp_genes <- read_table("../data/processed/magma/fish_oil_hscrp_log.genes.out") %>%
-#   arrange(P)
-# fish_oil_n3_genes <- read_table("../data/processed/magma/fish_oil_Omega_3_pct.genes.out") %>%
-#   arrange(P)
 ```
 
 The goal of this analysis was to understand the genetic modification of the relationship between dietary omega-3 intake and hsCRP, with plasma omega-3 (as a % of FA from NMR) as an established mediator. We conducted a series of genome-wide interaction studies to explore this possibility, with some of these models used to decompose the N3-hsCRP relationship into components "upstream" and "downstream" of the plasma omega-3 mediator.
@@ -183,9 +166,6 @@ make_manhattan(pull(filter(gwis_res_df, e == "dn3fa", y == "hscrp_log"), nom_res
   labs(title = "Variant-level: dN3FA - hsCRP")
 
 include_graphics("../data/processed/gwis/qq_plots/dn3fa_hscrp_log_robust_QQ.pdf")
-
-# make_manhattan(fish_crp_gwis, "robust_P_joint", threshold = 5e-8, add_labels = FALSE) +
-#   labs(title = "Variant-level joint test: oily fish - hsCRP")
 
 make_manhattan(pull(filter(gene_res_df, e == "dn3fa", y == "hscrp_log"), res)[[1]],
                "P", snp_col = "GENE", pos_col = "START", threshold = gene_bonferroni) +
@@ -534,9 +514,6 @@ run_gene_follow_up <- function(gene, e, y,
   
   e_regression <- if (e == "fish_oil") "fish_oil_touchscreen" else e
   
-  # gwis_sumstats_df <- read_tsv(paste0("../data/processed/gene_followup/", 
-  #                                     e, "_", y, "_", gene, "_subset"))
-  
   top_snp_df <- read_tsv(paste0("../data/processed/gene_followup/", 
                                  e, "_", y, "_", gene, "_top_snp.raw")) %>%
     select(id = IID, last_col()) %>%
@@ -558,9 +535,6 @@ run_gene_follow_up <- function(gene, e, y,
   )
   sensitivity_covar_res_df <- tibble(covar_set = names(sensitivity_covar_list)) %>%
     rowwise() %>%
-    # mutate(model_res = list(run_gxe(top_snp, e_regression, y,
-    #                                 sensitivity_covar_list[[covar_set]], 
-    #                                 regression_df, std = TRUE))) %>%
     mutate(model_res = list(run_gxe(
       top_snp, e_regression, y,
       sensitivity_covar_list[[covar_set]], 
@@ -585,72 +559,6 @@ run_gene_follow_up <- function(gene, e, y,
     unnest(model_res) %>%
     mutate(across(estimate:p.value, ~ signif(., 3)))
   print(sensitivity_e_res_df)
-  
-  # all_maf_sumstats_df <- read_tsv(paste0("../data/processed/gene_followup/", 
-  #                                        e, "_", y, "_", gene, "_regressions"))
-  # 
-  # all_maf_sumstats_df %>%
-  #   mutate(CHR = gsub("^chr", "", CHR)) %>%
-  #   select(CHR, start = POS, end= POS, Non_Effect_Allele, Effect_Allele, SNPID) %>%
-  #   write_tsv(paste0("../data/processed/annovar/", gene, "_annovar_input.tsv"))
-  # system(paste0("post_gwis/run_annovar.sh ", gene))
-  # variant_annot_df <- read_tsv(
-  #   paste0("../data/processed/annovar/", gene, "_variants.variant_function"),
-  #   col_names = c("annot", "gene", "chr", "start", "end", "REF", "ALT", "SNPID")
-  # ) %>%
-  #   select(SNPID, annot)
-  # all_maf_sumstats_df <- all_maf_sumstats_df %>%
-  #   left_join(variant_annot_df, by = "SNPID") %>%
-  #   mutate(annot = ifelse(is.na(annot), "unannotated", annot))
-  # 
-  # all_maf_cond_sumstats_df <- read_tsv(paste0("../data/processed/gene_followup/", 
-  #                                             e, "_", y, "_", gene, "_regressions_cond")) %>%
-  #   left_join(variant_annot_df, by = "SNPID") %>%
-  #   mutate(annot = ifelse(is.na(annot), "unannotated", annot))
-  # 
-  # int_effect_maf_plt <- make_int_effect_maf_plot(all_maf_sumstats_df, e, top_snp)
-  # # int_effect_cond_maf_plt <- make_int_effect_maf_plot(
-  # #   filter(all_maf_cond_sumstats_df, 
-  # #          POS != str_remove_all(top_snp, "^chr[0-9]+:|:[ATGC].*$")), 
-  # #   e, top_snp
-  # # )
-  # int_effect_cond_plt <- make_int_effect_cond_plot(all_maf_sumstats_df,
-  #                                                  all_maf_cond_sumstats_df,
-  #                                                  e, top_snp)
-  # int_p_cond_plt <- make_int_p_cond_plot(all_maf_sumstats_df, 
-  #                                        all_maf_cond_sumstats_df,
-  #                                        e, top_snp)
-
-  # print(int_effect_maf_plt)
-  # print(int_effect_cond_plt)
-  # print(int_p_cond_plt)
-  
-  # beta_int_col <- paste0("Beta_G-", e_regression)
-  # top_cond_sumstats_df <- all_maf_cond_sumstats_df %>%
-  #   filter(SE_Beta_G < (100 * median(SE_Beta_G))) %>%
-  #   mutate(MAF = pmin(AF, 1 - AF)) %>%
-  #   # arrange(desc(abs(!! sym(beta_int_col)))) %>%
-  #   arrange(P_Value_Interaction) %>%
-  #   select(SNPID, 
-  #          # CHR, POS, Effect_Allele, 
-  #          MAF, annot,
-  #          {{beta_int_col}}, 
-  #          `P-int` = P_Value_Interaction, `P-marg` = P_Value_Marginal) %>%
-  #   head(10)
-  # print("Top variants in conditional analysis")
-  # print(top_cond_sumstats_df)
-  
-  # top_cond_snp_df <- read_tsv(paste0("../data/processed/gene_followup/", 
-  #                                    e, "_", y, "_", gene, "_top_cond_snp.raw")) %>%
-  #   select(id = IID, last_col()) %>%
-  #   mutate(id = as.character(id))
-  # top_cond_snp <- names(top_cond_snp_df)[snp_idx + 1]
-  # regression_df <- inner_join(phenos, top_cond_snp_df, by = "id")
-  # cond_double_strat_plt <- make_double_strat_plot(top_cond_snp, e_regression, y, regression_df,
-  #                                                 "Stratified interaction plot for top conditional rare SNP")
-  # cond_g_strat_plt <- make_g_strat_plot(top_cond_snp, e_regression, y, regression_df,
-  #                                       "Stratified interaction plot for top conditional rare SNP")
-  # print(cond_double_strat_plt + cond_g_strat_plt)
 }
 ```
 
@@ -702,9 +610,7 @@ run_gene_follow_up("fen1", "oily_fish", "Omega_3_pct")
 
 ```{r upstream-genes, eval=F}
 run_gene_follow_up("sfrp1", "oily_fish", "Omega_3_pct")
-# run_gene_follow_up("mmp16", "oily_fish", "Omega_3_pct")
 run_gene_follow_up("gltscr1", "oily_fish", "Omega_3_pct")
-# run_gene_follow_up("ros1", "oily_fish", "Omega_3_pct")
 ```
 
 ## "Downstream" genes (N3 % -> hsCRP)
@@ -832,13 +738,6 @@ fetch_top_rsid <- function(gene) {
   if (length(top_rsid) == 1) top_rsid else gsub(":[A-Z]*:[A-Z]*", "", top_snp)
 }
 
-# fetch_top_rsid2 <- function(gene) {
-#   f2 <- list.files(path = "../data/processed/gene_followup/", 
-#                    pattern = paste0(".*", tolower(gene), "_top_rsid2.txt"),
-#                   full.names = TRUE)
-#   tryCatch(scan(f2, what = character(), quiet = TRUE), error = function(e) "")
-# }
-
 replication_export_tbl <- gene_summary_df %>%
   filter(fdr_sig) %>%
   rowwise() %>%
@@ -903,84 +802,8 @@ up_down_rep_df <- bind_rows(list(
 # Export datasets for manuscript
 
 ```{r export-manuscript}
-# gwis_summary_df <- bind_rows(list(
-#   full = pull(filter(gwis_res_df, e == "dn3fa", y == "hscrp_log"), res)[[1]],
-#   upstream = pull(filter(gwis_res_df, e == "dn3fa", y == "Omega_3_pct"), res)[[1]],
-#   downstream = pull(filter(gwis_res_df, e == "Omega_3_pct", y == "hscrp_log"), res)[[1]]
-# ), .id = "pathway") %>%
-#   mutate(q = p.adjust(P, method = "BH"),
-#          fdr_sig = q < 0.05)
-# saveRDS(gwis_summary_df, "../data/processed/manuscript/gwis_summary_df.rds")
-
 saveRDS(gene_summary_df, "../data/processed/manuscript/gene_summary_df.rds")
-# saveRDS(gc_summary_df, "../data/processed/manuscript/gc_summary_df.rds")
 
 saveRDS(sim_res, "../data/processed/manuscript/power_sim_res_df.rds")
 saveRDS(up_down_rep_df, "../data/processed/manuscript/up_down_rep_df.rds")
 ```
-
-# Archive
-
-```{r old-gene-followup-viz-functions, eval=F}
-make_gene_snp_plot <- function(ss_df, p_col = "robust_P_Value_Interaction") {
-  ss_df %>%
-    mutate(nlp_int = -log10(!!sym(p_col))) %>%
-    ggplot(aes(x = POS, y = nlp_int)) +
-    geom_point() +
-    geom_text(aes(label = SNPID)) +
-    labs(y=expression(-log[10](p[int])))
-}
-
-make_int_effect_chr_plot <- function(all_maf_ss_df, e, top_snpid) {
-  beta_vec <- all_maf_ss_df[[paste0("Beta_G-", e)]]
-  ylims <- median(beta_vec, na.rm = TRUE) + c(-5, 5) * mad(beta_vec, na.rm = TRUE)
-  all_maf_ss_df %>%
-    mutate(int_estimate = !!sym(paste0("Beta_G-", e)),
-           int_se = !!sym(paste0("SE_Beta_G-", e))) %>%
-    arrange(int_estimate) %>%
-    mutate(l95 = int_estimate - 1.96 * int_se,
-           u95 = int_estimate + 1.96 * int_se,
-           top_gwis = (SNPID == gsub("_.*", "", top_snpid)),
-           SNPID = factor(SNPID, levels = SNPID)) %>%
-    ggplot(aes(x = POS, y = int_estimate)) +
-    geom_point(aes(color = top_gwis)) +
-    geom_errorbar(aes(ymin=l95, ymax=u95, color = top_gwis), width = 0.2) +
-    geom_hline(yintercept = 0, color = "gray") +
-    # geom_text(aes(label = SNPID)) +
-    scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "red"), 
-                       breaks = c(TRUE),
-                       labels = c("Top variant from GWIS")) +
-    labs(x = "SNPID", y = "Interaction effect estimate (95% CI)") +
-    # coord_cartesian(ylim = ylims) +
-    theme(axis.text.x = element_blank(),
-          # axis.text.x = element_text(angle = 45, hjust = 0.9),
-          legend.position = "bottom", legend.title = element_blank(), 
-          legend.key = element_blank())
-}
-```
-
-## AHA EPI Lifestyle abstract
-
-```{r aha-results, eval=F}
-fads1_var_annot <- read_table("../data/processed/annovar/fads1_variants.variant_function",
-                              col_names = c("annot", "gene", "CHR", "POS", "POS2", "REF", "ALT", "RSID"))
-fads1_cond_regressions <- read_tsv("../data/processed/gene_followup/oily_fish_Omega_3_pct_fads1_regressions_cond") %>%
-  left_join(select(fads1_var_annot, CHR, POS, annot), by = c("CHR", "POS"))
-fads1_regressions <- read_tsv("../data/processed/gene_followup/oily_fish_Omega_3_pct_fads1_regressions") %>%
-  left_join(select(fads1_var_annot, CHR, POS, annot), by = c("CHR", "POS"))
-nonstd_effect <- fads1_cond_regressions %>%
-  filter(AF < 0.01,
-         annot == "exonic") %>%
-  arrange(P_Value_Interaction) %>%
-  slice(1) %>%
-  select(RSID, AF, `Beta_G-oily_fish`, annot)
-std_effect <- nonstd_effect$`Beta_G-oily_fish` / sd(phenos$Omega_3_pct, na.rm = TRUE) * 
-  sd(phenos$oily_fish, na.rm = TRUE)
-                                                           
-
-fads2_var_annot <- read_table("../data/processed/annovar/fads2_variants.variant_function",
-                              col_names = c("annot", "gene", "CHR", "POS", "POS2", "REF", "ALT", "RSID"))
-fads2_cond_regressions <- read_tsv("../data/processed/gene_followup/oily_fish_Omega_3_pct_fads2_regressions_cond") %>%
-  left_join(select(fads2_var_annot, CHR, POS, annot), by = c("CHR", "POS"))
-```
-

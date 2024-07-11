@@ -327,9 +327,9 @@ std_med_res_df %>%
   select(-med_obj, -contains(".p")) %>%
   pivot_longer(c(contains(".avg"), tau.coef), names_to = "quantity", values_to = "value") %>%
   filter(
-    # y == "hscrp_log",
     quantity != "n.avg",
-    quantity != "z.avg") %>%
+    quantity != "z.avg"
+  ) %>%
   mutate(quantity = factor(quantity,
                            levels = c("tau.coef", "d.avg"),
                            labels = c("Total effect", "Mediated effect"))) %>%
@@ -397,95 +397,4 @@ saveRDS(pheno_corr_df, "../data/processed/manuscript/pheno_corr_df.rds")
 saveRDS(n3fa_impute_weights_df, "../data/processed/manuscript/n3fa_impute_weights_df.rds")
 saveRDS(std_med_res_df, "../data/processed/manuscript/std_med_res_df.rds")
 saveRDS(std_nc_med_res_df, "../data/processed/manuscript/std_nc_med_res_df.rds")
-```
-
-# Archive
-
-```{r nmr-mediation-old, cache = 1, eval = F}
-test_mediation <- function(x, m, y, covars, df) {
-  df <- df %>%
-    select(all_of(c(x, m, y, covars))) %>%
-    na.omit()
-  med_form_str <- paste0(m, " ~ ", x, " + ", 
-                         paste(covars, collapse = " + "))
-  med_fit <- lm(as.formula(med_form_str), data = df)
-  out_form_str <- paste0(y, " ~ ", m, " + ", x, " + ",
-                         paste(covars, collapse = " + "))
-  out_fit <- lm(as.formula(out_form_str), data = df)
-  med_out <- mediation::mediate(med_fit, out_fit, treat = x, mediator = m, 
-                                robustSE = TRUE, sims = 100)
-  med_out
-}
-
-main_med_obj <- test_mediation(
-  "oily_fish", "Omega_3_pct", "hscrp_log", all_covars, phenos
-)
-
-unadj_med_obj <- test_mediation(
-  "oily_fish", "Omega_3_pct", "hscrp_log", covar_sets$minimal, phenos
-)
-
-no_med_obj <- test_mediation(
-  "nonoily_fish", "Omega_3_pct", "hscrp_log", all_covars, phenos
-)
-
-neg_control_obj <- test_mediation(
-  "raw_veg", "Omega_3_pct", "hscrp_log", all_covars, phenos
-)
-
-print("Primary oily fish mediation test:")
-plot(main_med_obj, main = "Primary oily fish mediation test", xlim = c(-0.5, 0))
-summary(main_med_obj)
-print("Minimally-adjusted mediation test:")
-plot(unadj_med_obj, main = "Minimally-adjusted mediation test", xlim = c(-0.5, 0))
-summary(unadj_med_obj)
-print("Non-oily fish mediation test:")
-plot(no_med_obj, main = "Non-oily fish mediation test", xlim = c(-0.5, 0))
-summary(no_med_obj)
-print("Raw vegetable intake mediation test (healthy lifestyle negative control):")
-plot(neg_control_obj, main = "Raw vegetable intake mediation test (healthy lifestyle negative control)", 
-     xlim = c(-0.02, 0))
-summary(neg_control_obj)
-
-print("FFQ_N3FA - N3FA - hsCRP:")
-dn3fa_med_obj <- test_mediation(
-  "dn3fa", "Omega_3_pct", "hscrp_log", all_covars, phenos
-)
-summary(dn3fa_med_obj)
-
-print("Fish oil - N3FA - hsCRP:")
-fish_oil_med_obj <- test_mediation(
-  "fish_oil_touchscreen", "Omega_3_pct", "hscrp_log", all_covars, phenos
-)
-summary(fish_oil_med_obj)
-
-print("Oily fish - N3FA - TG:")
-tg_med_obj <- test_mediation(
-  "oily_fish", "Omega_3_pct", "tg_log", all_covars, phenos
-)
-summary(tg_med_obj)
-
-print("Oily fish - N3FA - LDL:")
-ldl_med_obj <- test_mediation(
-  "oily_fish", "Omega_3_pct", "ldl_statinadj", all_covars, phenos
-)
-summary(ldl_med_obj)
-
-print("Oily fish - N3FA - LDL, w/ BMI adj:")
-ldl_med_bmiAdj_obj <- test_mediation(
-  "oily_fish", "Omega_3_pct", "ldl_statinadj", c(all_covars, "bmi"), phenos
-)
-summary(ldl_med_bmiAdj_obj)
-
-print("Oily fish - DHA - hsCRP:")
-dha_med_obj <- test_mediation(
-  "oily_fish", "DHA_pct", "hscrp_log", all_covars, phenos
-)
-summary(dha_med_obj)
-
-print("Oily fish - EPA - hsCRP:")
-epa_med_obj <- test_mediation(
-  "oily_fish", "nonDHA_pct", "hscrp_log", all_covars, phenos
-)
-summary(epa_med_obj)
 ```
